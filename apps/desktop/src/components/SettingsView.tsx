@@ -1,27 +1,7 @@
-import { createSignal, onMount } from 'solid-js'
-import { getAutoStartEnabled, setAutoStart } from '../lib/api'
+import { useApp } from '../lib/context'
 
 export default function SettingsView() {
-  const [autoStart, setAutoStartState] = createSignal(true)
-  const [loading, setLoading] = createSignal(true)
-
-  onMount(async () => {
-    try {
-      setAutoStartState(await getAutoStartEnabled())
-    } finally {
-      setLoading(false)
-    }
-  })
-
-  const toggleAutoStart = async () => {
-    const next = !autoStart()
-    setAutoStartState(next)
-    try {
-      await setAutoStart(next)
-    } catch {
-      setAutoStartState(!next)
-    }
-  }
+  const { autoStart, toggleAutoStart } = useApp()
 
   return (
     <div class="settings-view">
@@ -64,7 +44,6 @@ export default function SettingsView() {
           <button
             class={`toggle ${autoStart() ? 'toggle-on' : ''}`}
             onClick={toggleAutoStart}
-            disabled={loading()}
             aria-label="Toggle launch at login"
           >
             <span class="toggle-knob" />
