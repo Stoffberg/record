@@ -50,6 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+          shared-key: rust-macos
 
       - name: cargo fmt
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
@@ -81,15 +82,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+          shared-key: rust-macos
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Install Tauri CLI
-        uses: cargo-bins/cargo-binstall@main
+      - name: Build frontend
+        run: pnpm --filter @record/desktop build
 
-      - run: cargo binstall tauri-cli --no-confirm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Tauri app
-        run: pnpm build
+      - name: Build Rust
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --release
