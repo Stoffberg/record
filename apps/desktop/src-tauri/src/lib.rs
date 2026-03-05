@@ -16,6 +16,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, RunEvent, WindowEvent,
 };
+use tauri_plugin_autostart::ManagerExt;
 
 struct AppState {
     store: Arc<Mutex<SessionStore>>,
@@ -185,6 +186,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let autostart = app.autolaunch();
+            if !autostart.is_enabled().unwrap_or(false) {
+                let _ = autostart.enable();
+            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
