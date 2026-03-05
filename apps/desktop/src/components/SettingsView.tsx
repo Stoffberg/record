@@ -10,31 +10,6 @@ export default function SettingsView() {
       </header>
 
       <div class="settings-section">
-        <h2>Tracking</h2>
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Poll interval</span>
-            <span class="setting-desc">How often to check the active app</span>
-          </div>
-          <span class="setting-value mono">5 seconds</span>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Idle threshold</span>
-            <span class="setting-desc">Time before marking as idle</span>
-          </div>
-          <span class="setting-value mono">5 minutes</span>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">Merge gap</span>
-            <span class="setting-desc">Max gap between heartbeats to merge</span>
-          </div>
-          <span class="setting-value mono">10 seconds</span>
-        </div>
-      </div>
-
-      <div class="settings-section">
         <h2>System</h2>
         <div class="setting-row">
           <div class="setting-info">
@@ -48,15 +23,6 @@ export default function SettingsView() {
           >
             <span class="toggle-knob" />
           </button>
-        </div>
-        <div class="setting-row setting-row-stacked">
-          <div class="setting-info">
-            <span class="setting-label">Data location</span>
-            <span class="setting-desc">Where your activity data is stored</span>
-          </div>
-          <span class="setting-value mono" style={{ 'font-size': '0.6875rem' }}>
-            ~/Library/Application Support/dev.stoff.record/record.db
-          </span>
         </div>
       </div>
 
