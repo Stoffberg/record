@@ -1,10 +1,26 @@
 import type { JSX } from 'solid-js'
-import { createContext, createSignal, onMount, useContext } from 'solid-js'
+import { createContext, createEffect, createSignal, onMount, useContext } from 'solid-js'
 import { getAutoStartEnabled, setAutoStart as setAutoStartApi } from './api'
+
+export type Theme = 'system' | 'light' | 'dark'
 
 interface AppState {
   autoStart: () => boolean
   toggleAutoStart: () => Promise<void>
+  theme: () => Theme
+  setTheme: (theme: Theme) => void
+}
+
+const THEME_KEY = 'record-theme'
+
+function applyTheme(theme: Theme) {
+  document.documentElement.setAttribute('data-theme', theme)
+}
+
+function loadTheme(): Theme {
+  const stored = localStorage.getItem(THEME_KEY)
+  if (stored === 'light' || stored === 'dark' || stored === 'system') return stored
+  return 'system'
 }
 
 const AppContext = createContext<AppState>()
@@ -12,6 +28,18 @@ const AppContext = createContext<AppState>()
 export function AppProvider(props: { children: JSX.Element; fallback?: JSX.Element }) {
   const [ready, setReady] = createSignal(false)
   const [autoStart, setAutoStart] = createSignal(false)
+  const [theme, setThemeSignal] = createSignal<Theme>(loadTheme())
+
+  applyTheme(theme())
+
+  const setTheme = (next: Theme) => {
+    setThemeSignal(next)
+    localStorage.setItem(THEME_KEY, next)
+  }
+
+  createEffect(() => {
+    applyTheme(theme())
+  })
 
   onMount(async () => {
     try {
@@ -34,6 +62,8 @@ export function AppProvider(props: { children: JSX.Element; fallback?: JSX.Eleme
   const state: AppState = {
     autoStart,
     toggleAutoStart,
+    theme,
+    setTheme,
   }
 
   return (
