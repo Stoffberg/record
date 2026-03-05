@@ -90,8 +90,7 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 
 ## Roadmap
 
-- [ ] Launch at login (autostart on macOS login)
-- [ ] Editable settings (poll interval, idle threshold, merge gap)
+- [x] Launch at login (autostart on macOS login)
 - [ ] Onboarding screen with Accessibility permission prompt
 - [ ] Click a day in monthly view to see that day's breakdown
 - [ ] Data export (JSON/CSV for backup or LLM analysis)
