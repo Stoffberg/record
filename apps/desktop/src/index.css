@@ -381,6 +381,45 @@ body {
   letter-spacing: 0.02em;
 }
 
+.toggle {
+  position: relative;
+  width: 2.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-hover);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transition: transform 0.15s, background 0.15s;
+}
+
+.toggle-on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.toggle-on .toggle-knob {
+  transform: translateX(1rem);
+  background: var(--accent);
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     --bg-base: #fafafa;

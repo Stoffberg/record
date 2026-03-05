@@ -1,5 +1,10 @@
 import type { AppSession, DailySummary } from '@record/types'
 import { invoke } from '@tauri-apps/api/core'
+import {
+  disable as disableAutostart,
+  enable as enableAutostart,
+  isEnabled as isAutostartEnabled,
+} from '@tauri-apps/plugin-autostart'
 
 export async function getSessions(start: Date, end: Date): Promise<AppSession[]> {
   return invoke<AppSession[]>('get_sessions', {
@@ -20,4 +25,16 @@ export async function getAppIcon(bundleId: string): Promise<string | null> {
   const result = await invoke<string | null>('get_app_icon', { bundleId })
   iconCache.set(bundleId, result)
   return result
+}
+
+export async function getAutoStartEnabled(): Promise<boolean> {
+  return isAutostartEnabled()
+}
+
+export async function setAutoStart(enabled: boolean): Promise<void> {
+  if (enabled) {
+    await enableAutostart()
+  } else {
+    await disableAutostart()
+  }
 }
