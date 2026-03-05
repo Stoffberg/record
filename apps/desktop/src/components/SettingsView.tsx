@@ -49,12 +49,12 @@ export default function SettingsView() {
             <span class="toggle-knob" />
           </button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row setting-row-stacked">
           <div class="setting-info">
             <span class="setting-label">Data location</span>
             <span class="setting-desc">Where your activity data is stored</span>
           </div>
-          <span class="setting-value mono" style={{ 'font-size': '0.75rem' }}>
+          <span class="setting-value mono" style={{ 'font-size': '0.6875rem' }}>
             ~/Library/Application Support/dev.stoff.record/record.db
           </span>
         </div>
