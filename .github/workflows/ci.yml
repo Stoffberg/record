@@ -84,5 +84,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
+
       - name: Build Tauri app
         run: pnpm build
