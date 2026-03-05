@@ -17,3 +17,4 @@ npm-debug.log*
 pnpm-debug.log*
 
 lefthook-local.yml
+.env
