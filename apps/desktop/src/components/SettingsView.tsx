@@ -2,7 +2,7 @@ import { createSignal, onMount } from 'solid-js'
 import { getAutoStartEnabled, setAutoStart } from '../lib/api'
 
 export default function SettingsView() {
-  const [autoStart, setAutoStartState] = createSignal(false)
+  const [autoStart, setAutoStartState] = createSignal(true)
   const [loading, setLoading] = createSignal(true)
 
   onMount(async () => {
