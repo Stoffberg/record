@@ -2,6 +2,7 @@ import type { AppUsage } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import { getAppIcon, getDailySummary } from '../lib/api'
+import AppDetailView from './AppDetailView'
 
 function formatDuration(secs: number): string {
   if (secs < 60) return `${secs}s`
@@ -57,6 +58,7 @@ export default function TodayView() {
     ready: false,
   })
   const [elapsed, setElapsed] = createSignal(0)
+  const [selectedApp, setSelectedApp] = createSignal<AppUsage | null>(null)
   let lastFetchTime = 0
 
   async function refresh() {
@@ -101,67 +103,72 @@ export default function TodayView() {
   })
 
   return (
-    <div class="today-view">
-      <header class="today-header">
-        <h1>
-          {new Date().toLocaleDateString('en-US', {
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-          })}
-        </h1>
-      </header>
+    <Show
+      when={!selectedApp()}
+      fallback={<AppDetailView app={selectedApp()!} onBack={() => setSelectedApp(null)} />}
+    >
+      <div class="today-view">
+        <header class="today-header">
+          <h1>
+            {new Date().toLocaleDateString('en-US', {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </h1>
+        </header>
 
-      <Show when={state.ready} fallback={<div class="today-empty">Waiting for data...</div>}>
-        <div class="today-stats">
-          <div class="stat-card">
-            <span class="stat-label">Active</span>
-            <span class="stat-value mono">{formatTime(activeTime())}</span>
+        <Show when={state.ready} fallback={<div class="today-empty">Waiting for data...</div>}>
+          <div class="today-stats">
+            <div class="stat-card">
+              <span class="stat-label">Active</span>
+              <span class="stat-value mono">{formatTime(activeTime())}</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Idle</span>
+              <span class="stat-value mono">{formatTime(idleTime())}</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Apps</span>
+              <span class="stat-value mono">{visibleApps().length}</span>
+            </div>
           </div>
-          <div class="stat-card">
-            <span class="stat-label">Idle</span>
-            <span class="stat-value mono">{formatTime(idleTime())}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">Apps</span>
-            <span class="stat-value mono">{visibleApps().length}</span>
-          </div>
-        </div>
 
-        <Show
-          when={visibleApps().length > 0}
-          fallback={<div class="today-empty">No activity recorded yet. Keep working.</div>}
-        >
-          <div class="app-list">
-            <For each={visibleApps()}>
-              {(app, i) => {
-                const liveSecs = () => (i() === 0 ? app.total_secs + elapsed() : app.total_secs)
-                const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)
-                return (
-                  <div class="app-row">
-                    <div class="app-bar-accent" style={{ height: `${pct()}%` }} />
-                    <AppIcon bundleId={app.bundle_id} />
-                    <div class="app-body">
-                      <div class="app-info">
-                        <span class="app-name">{app.app_name}</span>
-                        <span class="app-meta mono">
-                          {formatDuration(liveSecs())}
-                          <span class="app-sessions">
-                            {app.session_count} session{app.session_count !== 1 ? 's' : ''}
+          <Show
+            when={visibleApps().length > 0}
+            fallback={<div class="today-empty">No activity recorded yet. Keep working.</div>}
+          >
+            <div class="app-list">
+              <For each={visibleApps()}>
+                {(app, i) => {
+                  const liveSecs = () => (i() === 0 ? app.total_secs + elapsed() : app.total_secs)
+                  const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)
+                  return (
+                    <button type="button" class="app-row" onClick={() => setSelectedApp(app)}>
+                      <div class="app-bar-accent" style={{ height: `${pct()}%` }} />
+                      <AppIcon bundleId={app.bundle_id} />
+                      <div class="app-body">
+                        <div class="app-info">
+                          <span class="app-name">{app.app_name}</span>
+                          <span class="app-meta mono">
+                            {formatDuration(liveSecs())}
+                            <span class="app-sessions">
+                              {app.session_count} session{app.session_count !== 1 ? 's' : ''}
+                            </span>
                           </span>
-                        </span>
+                        </div>
+                        <div class="app-bar-track">
+                          <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
+                        </div>
                       </div>
-                      <div class="app-bar-track">
-                        <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
-                      </div>
-                    </div>
-                  </div>
-                )
-              }}
-            </For>
-          </div>
+                    </button>
+                  )
+                }}
+              </For>
+            </div>
+          </Show>
         </Show>
-      </Show>
-    </div>
+      </div>
+    </Show>
   )
 }

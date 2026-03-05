@@ -124,6 +124,59 @@ fn get_app_icon(
 }
 
 #[tauri::command]
+fn get_app_sessions(
+    state: tauri::State<AppState>,
+    date: String,
+    bundle_id: String,
+) -> Result<Vec<types::AppSession>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_app_sessions(&date, &bundle_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_app_averages(
+    state: tauri::State<AppState>,
+    date: String,
+    bundle_id: String,
+) -> Result<(f64, f64), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_app_averages(&bundle_id, &date)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_exclusion(
+    state: tauri::State<AppState>,
+    bundle_id: String,
+    app_name: String,
+    expires_at: Option<String>,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .add_exclusion(&bundle_id, &app_name, expires_at.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_exclusion(state: tauri::State<AppState>, bundle_id: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .remove_exclusion(&bundle_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_exclusions(
+    state: tauri::State<AppState>,
+) -> Result<Vec<(String, String, Option<String>)>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.get_exclusions().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn check_accessibility() -> bool {
     macos_accessibility_check(false)
 }
@@ -269,6 +322,11 @@ pub fn run() {
             get_sessions,
             get_daily_summary,
             get_app_icon,
+            get_app_sessions,
+            get_app_averages,
+            add_exclusion,
+            remove_exclusion,
+            get_exclusions,
             check_accessibility,
             request_accessibility
         ])

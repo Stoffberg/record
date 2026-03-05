@@ -157,6 +157,120 @@ impl SessionStore {
         })
     }
 
+    pub fn get_app_averages(&self, bundle_id: &str, today: &str) -> rusqlite::Result<(f64, f64)> {
+        let today_date = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap();
+        let week_start = (today_date - chrono::Duration::days(6))
+            .format("%Y-%m-%d")
+            .to_string();
+        let month_start = (today_date - chrono::Duration::days(29))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let week_avg: f64 = self.conn.query_row(
+            "SELECT COALESCE(CAST(SUM(duration_secs) AS REAL) / 7.0, 0.0)
+             FROM app_sessions
+             WHERE bundle_id = ?1 AND is_idle = 0
+             AND started_at >= ?2 AND started_at < ?3",
+            rusqlite::params![bundle_id, week_start, today],
+            |row| row.get(0),
+        )?;
+
+        let month_avg: f64 = self.conn.query_row(
+            "SELECT COALESCE(CAST(SUM(duration_secs) AS REAL) / 30.0, 0.0)
+             FROM app_sessions
+             WHERE bundle_id = ?1 AND is_idle = 0
+             AND started_at >= ?2 AND started_at < ?3",
+            rusqlite::params![bundle_id, month_start, today],
+            |row| row.get(0),
+        )?;
+
+        Ok((week_avg, month_avg))
+    }
+
+    pub fn get_app_sessions(
+        &self,
+        date: &str,
+        bundle_id: &str,
+    ) -> rusqlite::Result<Vec<AppSession>> {
+        let next_day = {
+            let d = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+            (d + chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string()
+        };
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata
+             FROM app_sessions
+             WHERE started_at >= ?1 AND started_at < ?2 AND bundle_id = ?3 AND is_idle = 0
+             ORDER BY started_at ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![date, next_day, bundle_id], |row| {
+            let started_str: String = row.get(4)?;
+            let ended_str: String = row.get(5)?;
+            Ok(AppSession {
+                id: row.get(0)?,
+                app_name: row.get(1)?,
+                bundle_id: row.get(2)?,
+                window_title: row.get(3)?,
+                started_at: DateTime::parse_from_rfc3339(&started_str)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                ended_at: DateTime::parse_from_rfc3339(&ended_str)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                duration_secs: row.get(6)?,
+                is_idle: row.get(7)?,
+                metadata: row.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn add_exclusion(
+        &self,
+        bundle_id: &str,
+        app_name: &str,
+        expires_at: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO app_exclusions (bundle_id, app_name, expires_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![bundle_id, app_name, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_exclusion(&self, bundle_id: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM app_exclusions WHERE bundle_id = ?1",
+            rusqlite::params![bundle_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_exclusions(&self) -> rusqlite::Result<Vec<(String, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT bundle_id, app_name, expires_at FROM app_exclusions")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect()
+    }
+
+    pub fn is_excluded(&self, bundle_id: &str) -> rusqlite::Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "DELETE FROM app_exclusions WHERE expires_at IS NOT NULL AND expires_at < ?1",
+            rusqlite::params![now],
+        )?;
+
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM app_exclusions WHERE bundle_id = ?1",
+            rusqlite::params![bundle_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     fn init_schema(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS app_sessions (
@@ -173,6 +287,13 @@ impl SessionStore {
             CREATE INDEX IF NOT EXISTS idx_sessions_started ON app_sessions(started_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_bundle ON app_sessions(bundle_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_idle ON app_sessions(is_idle);
+
+            CREATE TABLE IF NOT EXISTS app_exclusions (
+                bundle_id TEXT PRIMARY KEY,
+                app_name TEXT NOT NULL,
+                expires_at TEXT
+            );
+
             PRAGMA journal_mode=WAL;",
         )?;
         Ok(())

@@ -104,18 +104,27 @@ impl Tracker {
             info!("Tracker started, polling every {}s", interval.as_secs());
             loop {
                 if let Some((app_name, bundle_id, window_title)) = probe.foreground_app() {
-                    let is_idle = probe.idle_seconds() >= idle_threshold;
-                    let heartbeat = Heartbeat {
-                        app_name,
-                        bundle_id,
-                        window_title,
-                        is_idle,
-                        timestamp: Utc::now(),
-                    };
+                    let excluded = self
+                        .store
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.is_excluded(&bundle_id).ok())
+                        .unwrap_or(false);
 
-                    if let Ok(store) = self.store.lock() {
-                        if let Err(e) = store.record_heartbeat(heartbeat) {
-                            error!("Failed to record heartbeat: {}", e);
+                    if !excluded {
+                        let is_idle = probe.idle_seconds() >= idle_threshold;
+                        let heartbeat = Heartbeat {
+                            app_name,
+                            bundle_id,
+                            window_title,
+                            is_idle,
+                            timestamp: Utc::now(),
+                        };
+
+                        if let Ok(store) = self.store.lock() {
+                            if let Err(e) = store.record_heartbeat(heartbeat) {
+                                error!("Failed to record heartbeat: {}", e);
+                            }
                         }
                     }
                 }
