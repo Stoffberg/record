@@ -88,6 +88,8 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - run: cargo binstall tauri-cli --no-confirm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Tauri app
         run: pnpm build
