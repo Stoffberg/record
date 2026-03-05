@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { createContext, createEffect, createSignal, onMount, useContext } from 'solid-js'
-import { getAutoStartEnabled, setAutoStart as setAutoStartApi } from './api'
+import { checkAccessibility, getAutoStartEnabled, setAutoStart as setAutoStartApi } from './api'
 
 export type Theme = 'system' | 'light' | 'dark'
 
@@ -9,9 +9,14 @@ interface AppState {
   toggleAutoStart: () => Promise<void>
   theme: () => Theme
   setTheme: (theme: Theme) => void
+  accessibilityGranted: () => boolean
+  recheckAccessibility: () => Promise<boolean>
+  onboardingDone: () => boolean
+  completeOnboarding: () => void
 }
 
 const THEME_KEY = 'record-theme'
+const ONBOARDING_KEY = 'record-onboarding-done'
 
 function applyTheme(theme: Theme) {
   document.documentElement.setAttribute('data-theme', theme)
@@ -29,6 +34,10 @@ export function AppProvider(props: { children: JSX.Element; fallback?: JSX.Eleme
   const [ready, setReady] = createSignal(false)
   const [autoStart, setAutoStart] = createSignal(false)
   const [theme, setThemeSignal] = createSignal<Theme>(loadTheme())
+  const [accessibilityGranted, setAccessibilityGranted] = createSignal(false)
+  const [onboardingDone, setOnboardingDone] = createSignal(
+    localStorage.getItem(ONBOARDING_KEY) === 'true',
+  )
 
   applyTheme(theme())
 
@@ -41,9 +50,29 @@ export function AppProvider(props: { children: JSX.Element; fallback?: JSX.Eleme
     applyTheme(theme())
   })
 
+  const recheckAccessibility = async () => {
+    const granted = await checkAccessibility()
+    setAccessibilityGranted(granted)
+    return granted
+  }
+
+  const completeOnboarding = () => {
+    setOnboardingDone(true)
+    localStorage.setItem(ONBOARDING_KEY, 'true')
+  }
+
   onMount(async () => {
     try {
-      setAutoStart(await getAutoStartEnabled())
+      const [autoStartEnabled, accessible] = await Promise.all([
+        getAutoStartEnabled(),
+        checkAccessibility(),
+      ])
+      setAutoStart(autoStartEnabled)
+      setAccessibilityGranted(accessible)
+      if (!accessible) {
+        setOnboardingDone(false)
+        localStorage.removeItem(ONBOARDING_KEY)
+      }
     } finally {
       setReady(true)
     }
@@ -64,6 +93,10 @@ export function AppProvider(props: { children: JSX.Element; fallback?: JSX.Eleme
     toggleAutoStart,
     theme,
     setTheme,
+    accessibilityGranted,
+    recheckAccessibility,
+    onboardingDone,
+    completeOnboarding,
   }
 
   return (

@@ -92,9 +92,12 @@ export default function TodayView() {
   const activeTime = () => state.activeSecs + elapsed()
   const idleTime = () => state.idleSecs
 
+  const visibleApps = createMemo(() => state.apps.filter((a) => a.total_secs >= 60))
+
   const topAppSecs = createMemo(() => {
-    if (state.apps.length === 0) return 1
-    return Math.max(state.apps[0].total_secs + elapsed(), 1)
+    const apps = visibleApps()
+    if (apps.length === 0) return 1
+    return Math.max(apps[0].total_secs + elapsed(), 1)
   })
 
   return (
@@ -121,16 +124,16 @@ export default function TodayView() {
           </div>
           <div class="stat-card">
             <span class="stat-label">Apps</span>
-            <span class="stat-value mono">{state.apps.length}</span>
+            <span class="stat-value mono">{visibleApps().length}</span>
           </div>
         </div>
 
         <Show
-          when={state.apps.length > 0}
+          when={visibleApps().length > 0}
           fallback={<div class="today-empty">No activity recorded yet. Keep working.</div>}
         >
           <div class="app-list">
-            <For each={state.apps}>
+            <For each={visibleApps()}>
               {(app, i) => {
                 const liveSecs = () => (i() === 0 ? app.total_secs + elapsed() : app.total_secs)
                 const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)

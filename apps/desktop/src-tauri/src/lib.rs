@@ -123,6 +123,69 @@ fn get_app_icon(
     Ok(result)
 }
 
+#[tauri::command]
+fn check_accessibility() -> bool {
+    macos_accessibility_check(false)
+}
+
+#[tauri::command]
+fn request_accessibility() -> bool {
+    macos_accessibility_check(true)
+}
+
+fn macos_accessibility_check(prompt: bool) -> bool {
+    use std::ptr;
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+    }
+    if !prompt {
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        return unsafe { AXIsProcessTrusted() };
+    }
+    extern "C" {
+        fn CFStringCreateWithCString(
+            alloc: *const std::ffi::c_void,
+            c_str: *const i8,
+            encoding: u32,
+        ) -> *const std::ffi::c_void;
+        fn CFDictionaryCreate(
+            allocator: *const std::ffi::c_void,
+            keys: *const *const std::ffi::c_void,
+            values: *const *const std::ffi::c_void,
+            num_values: isize,
+            key_callbacks: *const std::ffi::c_void,
+            value_callbacks: *const std::ffi::c_void,
+        ) -> *const std::ffi::c_void;
+        fn CFRelease(cf: *const std::ffi::c_void);
+        static kCFTypeDictionaryKeyCallBacks: std::ffi::c_void;
+        static kCFTypeDictionaryValueCallBacks: std::ffi::c_void;
+        static kCFBooleanTrue: *const std::ffi::c_void;
+    }
+    unsafe {
+        let key = CFStringCreateWithCString(
+            ptr::null(),
+            c"AXTrustedCheckOptionPrompt".as_ptr(),
+            0x08000100,
+        );
+        let keys = [key];
+        let values = [kCFBooleanTrue];
+        let options = CFDictionaryCreate(
+            ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const _,
+            &kCFTypeDictionaryValueCallBacks as *const _,
+        );
+        let trusted = AXIsProcessTrustedWithOptions(options);
+        CFRelease(options);
+        CFRelease(key);
+        trusted
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -205,7 +268,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions,
             get_daily_summary,
-            get_app_icon
+            get_app_icon,
+            check_accessibility,
+            request_accessibility
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
