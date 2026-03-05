@@ -91,7 +91,7 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 ## Roadmap
 
 - [x] Launch at login (autostart on macOS login)
-- [ ] Onboarding screen with Accessibility permission prompt
+- [x] Onboarding screen with Accessibility permission prompt
 - [ ] Click a day in monthly view to see that day's breakdown
 - [ ] Data export (JSON/CSV for backup or LLM analysis)
 - [ ] App exclusion list (ignore specific apps from tracking)
