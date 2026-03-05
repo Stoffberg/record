@@ -6,6 +6,19 @@ import {
   isEnabled as isAutostartEnabled,
 } from '@tauri-apps/plugin-autostart'
 
+function localDateStr(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function tzOffset(): number {
+  return -new Date().getTimezoneOffset()
+}
+
+export { localDateStr }
+
 export async function getSessions(start: Date, end: Date): Promise<AppSession[]> {
   return invoke<AppSession[]>('get_sessions', {
     start: start.toISOString(),
@@ -14,8 +27,10 @@ export async function getSessions(start: Date, end: Date): Promise<AppSession[]>
 }
 
 export async function getDailySummary(date: Date): Promise<DailySummary> {
-  const dateStr = date.toISOString().split('T')[0]
-  return invoke<DailySummary>('get_daily_summary', { date: dateStr })
+  return invoke<DailySummary>('get_daily_summary', {
+    date: localDateStr(date),
+    tzOffsetMinutes: tzOffset(),
+  })
 }
 
 const iconCache = new Map<string, string | null>()
@@ -40,13 +55,19 @@ export async function setAutoStart(enabled: boolean): Promise<void> {
 }
 
 export async function getAppSessions(date: Date, bundleId: string): Promise<AppSession[]> {
-  const dateStr = date.toISOString().split('T')[0]
-  return invoke<AppSession[]>('get_app_sessions', { date: dateStr, bundleId })
+  return invoke<AppSession[]>('get_app_sessions', {
+    date: localDateStr(date),
+    bundleId,
+    tzOffsetMinutes: tzOffset(),
+  })
 }
 
 export async function getAppAverages(date: Date, bundleId: string): Promise<[number, number]> {
-  const dateStr = date.toISOString().split('T')[0]
-  return invoke<[number, number]>('get_app_averages', { date: dateStr, bundleId })
+  return invoke<[number, number]>('get_app_averages', {
+    date: localDateStr(date),
+    bundleId,
+    tzOffsetMinutes: tzOffset(),
+  })
 }
 
 export async function addExclusion(

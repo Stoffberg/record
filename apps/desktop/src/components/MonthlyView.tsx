@@ -1,6 +1,6 @@
 import type { AppUsage, DailySummary } from '@record/types'
 import { createMemo, createResource, createSignal, For, onMount, Show } from 'solid-js'
-import { getAppIcon, getDailySummary } from '../lib/api'
+import { getAppIcon, getDailySummary, localDateStr } from '../lib/api'
 
 function formatTime(secs: number): string {
   const h = Math.floor(secs / 3600)
@@ -23,8 +23,7 @@ function getDaysInMonth(): string[] {
   const today = now.getDate()
   const days: string[] = []
   for (let d = 1; d <= today; d++) {
-    const date = new Date(year, month, d)
-    days.push(date.toISOString().split('T')[0])
+    days.push(localDateStr(new Date(year, month, d)))
   }
   return days.reverse()
 }

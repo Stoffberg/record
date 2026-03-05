@@ -104,6 +104,12 @@ function Timeline(props: { sessions: AppSession[] }) {
     return marks
   })
 
+  const hoveredBlock = createMemo(() => {
+    const idx = hovered()
+    if (idx === null) return null
+    return blocks()[idx] ?? null
+  })
+
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: timeline hover is decorative
     <div class="timeline" onMouseLeave={() => setHovered(null)}>
@@ -116,25 +122,27 @@ function Timeline(props: { sessions: AppSession[] }) {
               classList={{ 'timeline-block-active': hovered() === block.index }}
               style={{ left: `${block.left}%`, width: `${block.width}%` }}
               onMouseEnter={() => setHovered(block.index)}
-            >
-              <Show when={hovered() === block.index}>
-                <div
-                  class="timeline-tooltip"
-                  classList={{
-                    'timeline-tooltip-right': block.left > 60,
-                  }}
-                >
-                  <span class="timeline-tooltip-time mono">{block.timeRange}</span>
-                  <span class="timeline-tooltip-duration mono">{block.duration}</span>
-                  <Show when={block.title}>
-                    <span class="timeline-tooltip-title">{block.title}</span>
-                  </Show>
-                </div>
-              </Show>
-            </div>
+            />
           )}
         </For>
       </div>
+      <Show when={hoveredBlock()}>
+        {(block) => (
+          <div
+            class="timeline-tooltip"
+            style={{
+              left: block().left > 60 ? 'auto' : `${block().left}%`,
+              right: block().left > 60 ? `${100 - block().left - block().width}%` : 'auto',
+            }}
+          >
+            <span class="timeline-tooltip-time mono">{block().timeRange}</span>
+            <span class="timeline-tooltip-duration mono">{block().duration}</span>
+            <Show when={block().title}>
+              <span class="timeline-tooltip-title">{block().title}</span>
+            </Show>
+          </div>
+        )}
+      </Show>
       <div class="timeline-labels">
         <For each={hourMarks()}>
           {(mark) => (

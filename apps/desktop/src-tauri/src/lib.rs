@@ -45,9 +45,12 @@ fn get_sessions(
 fn get_daily_summary(
     state: tauri::State<AppState>,
     date: String,
+    tz_offset_minutes: i32,
 ) -> Result<types::DailySummary, String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    store.get_daily_summary(&date).map_err(|e| e.to_string())
+    store
+        .get_daily_summary(&date, tz_offset_minutes)
+        .map_err(|e| e.to_string())
 }
 
 fn find_app_icon_path(bundle_id: &str) -> Option<PathBuf> {
@@ -128,10 +131,11 @@ fn get_app_sessions(
     state: tauri::State<AppState>,
     date: String,
     bundle_id: String,
+    tz_offset_minutes: i32,
 ) -> Result<Vec<types::AppSession>, String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     store
-        .get_app_sessions(&date, &bundle_id)
+        .get_app_sessions(&date, &bundle_id, tz_offset_minutes)
         .map_err(|e| e.to_string())
 }
 
@@ -140,10 +144,11 @@ fn get_app_averages(
     state: tauri::State<AppState>,
     date: String,
     bundle_id: String,
+    tz_offset_minutes: i32,
 ) -> Result<(f64, f64), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     store
-        .get_app_averages(&bundle_id, &date)
+        .get_app_averages(&bundle_id, &date, tz_offset_minutes)
         .map_err(|e| e.to_string())
 }
 

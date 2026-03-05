@@ -1,6 +1,17 @@
 use crate::types::{AppSession, AppUsage, DailySummary, Heartbeat, TrackerConfig};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use rusqlite::Connection;
+
+fn day_bounds_utc(date: &str, tz_offset_minutes: i32) -> (String, String) {
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+    let local_midnight = d.and_time(NaiveTime::MIN);
+    let utc_start = local_midnight - Duration::minutes(tz_offset_minutes as i64);
+    let utc_end = utc_start + Duration::days(1);
+    (
+        utc_start.and_utc().to_rfc3339(),
+        utc_end.and_utc().to_rfc3339(),
+    )
+}
 
 pub struct SessionStore {
     conn: Connection,
@@ -112,13 +123,12 @@ impl SessionStore {
         rows.collect()
     }
 
-    pub fn get_daily_summary(&self, date: &str) -> rusqlite::Result<DailySummary> {
-        let next_day = {
-            let d = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
-            (d + chrono::Duration::days(1))
-                .format("%Y-%m-%d")
-                .to_string()
-        };
+    pub fn get_daily_summary(
+        &self,
+        date: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<DailySummary> {
+        let (start, end) = day_bounds_utc(date, tz_offset_minutes);
 
         let (total_active, total_idle) = self.conn.query_row(
             "SELECT
@@ -126,7 +136,7 @@ impl SessionStore {
                 COALESCE(SUM(CASE WHEN is_idle = 1 THEN duration_secs ELSE 0 END), 0)
              FROM app_sessions
              WHERE started_at >= ?1 AND started_at < ?2",
-            rusqlite::params![date, next_day],
+            rusqlite::params![start, end],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )?;
 
@@ -139,7 +149,7 @@ impl SessionStore {
         )?;
 
         let apps: Vec<AppUsage> = stmt
-            .query_map(rusqlite::params![date, next_day], |row| {
+            .query_map(rusqlite::params![start, end], |row| {
                 Ok(AppUsage {
                     app_name: row.get(0)?,
                     bundle_id: row.get(1)?,
@@ -157,21 +167,31 @@ impl SessionStore {
         })
     }
 
-    pub fn get_app_averages(&self, bundle_id: &str, today: &str) -> rusqlite::Result<(f64, f64)> {
-        let today_date = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap();
-        let week_start = (today_date - chrono::Duration::days(6))
+    pub fn get_app_averages(
+        &self,
+        bundle_id: &str,
+        today: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<(f64, f64)> {
+        let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap();
+        let week_start_date = (today_date - Duration::days(6))
             .format("%Y-%m-%d")
             .to_string();
-        let month_start = (today_date - chrono::Duration::days(29))
+        let month_start_date = (today_date - Duration::days(29))
             .format("%Y-%m-%d")
             .to_string();
+
+        let (week_start, _) = day_bounds_utc(&week_start_date, tz_offset_minutes);
+        let (today_start, _) = day_bounds_utc(today, tz_offset_minutes);
+
+        let (month_start, _) = day_bounds_utc(&month_start_date, tz_offset_minutes);
 
         let week_avg: f64 = self.conn.query_row(
             "SELECT COALESCE(CAST(SUM(duration_secs) AS REAL) / 7.0, 0.0)
              FROM app_sessions
              WHERE bundle_id = ?1 AND is_idle = 0
              AND started_at >= ?2 AND started_at < ?3",
-            rusqlite::params![bundle_id, week_start, today],
+            rusqlite::params![bundle_id, week_start, today_start],
             |row| row.get(0),
         )?;
 
@@ -180,7 +200,7 @@ impl SessionStore {
              FROM app_sessions
              WHERE bundle_id = ?1 AND is_idle = 0
              AND started_at >= ?2 AND started_at < ?3",
-            rusqlite::params![bundle_id, month_start, today],
+            rusqlite::params![bundle_id, month_start, today_start],
             |row| row.get(0),
         )?;
 
@@ -191,13 +211,9 @@ impl SessionStore {
         &self,
         date: &str,
         bundle_id: &str,
+        tz_offset_minutes: i32,
     ) -> rusqlite::Result<Vec<AppSession>> {
-        let next_day = {
-            let d = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
-            (d + chrono::Duration::days(1))
-                .format("%Y-%m-%d")
-                .to_string()
-        };
+        let (start, end) = day_bounds_utc(date, tz_offset_minutes);
 
         let mut stmt = self.conn.prepare(
             "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata
@@ -205,7 +221,7 @@ impl SessionStore {
              WHERE started_at >= ?1 AND started_at < ?2 AND bundle_id = ?3 AND is_idle = 0
              ORDER BY started_at ASC",
         )?;
-        let rows = stmt.query_map(rusqlite::params![date, next_day, bundle_id], |row| {
+        let rows = stmt.query_map(rusqlite::params![start, end, bundle_id], |row| {
             let started_str: String = row.get(4)?;
             let ended_str: String = row.get(5)?;
             Ok(AppSession {
@@ -479,7 +495,7 @@ mod tests {
             .unwrap();
 
         let date = t1.format("%Y-%m-%d").to_string();
-        let summary = store.get_daily_summary(&date).unwrap();
+        let summary = store.get_daily_summary(&date, 0).unwrap();
 
         assert_eq!(summary.date, date);
         assert_eq!(summary.total_active_secs, 10);
@@ -547,7 +563,7 @@ mod tests {
         assert_eq!(sessions[1].duration_secs, 5);
 
         let date = t1.format("%Y-%m-%d").to_string();
-        let summary = store.get_daily_summary(&date).unwrap();
+        let summary = store.get_daily_summary(&date, 0).unwrap();
         assert_eq!(
             summary.total_active_secs, 0,
             "single active heartbeat has 0 duration"
