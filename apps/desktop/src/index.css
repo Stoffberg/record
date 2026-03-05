@@ -727,6 +727,55 @@ body {
   background: var(--bar-fill);
   border-radius: 3px;
   min-width: 2px;
+  cursor: default;
+  opacity: 0.7;
+  transition: opacity 0.1s;
+}
+
+.timeline-block:hover,
+.timeline-block-active {
+  opacity: 1;
+}
+
+.timeline-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 0.625rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  white-space: nowrap;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+}
+
+.timeline-tooltip-right {
+  left: auto;
+  right: 0;
+}
+
+.timeline-tooltip-time {
+  font-size: 0.6875rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.timeline-tooltip-duration {
+  font-size: 0.625rem;
+  color: var(--accent);
+}
+
+.timeline-tooltip-title {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .timeline-labels {

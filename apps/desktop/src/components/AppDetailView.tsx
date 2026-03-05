@@ -10,6 +10,14 @@ function formatDuration(secs: number): string {
   return `${m}m`
 }
 
+function formatTimeShort(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
 function formatHour(h: number): string {
   if (h === 0) return '12a'
   if (h < 12) return `${h}a`
@@ -43,6 +51,8 @@ function AppIcon(props: { bundleId: string; size?: number }) {
 }
 
 function Timeline(props: { sessions: AppSession[] }) {
+  const [hovered, setHovered] = createSignal<number | null>(null)
+
   const range = createMemo(() => {
     const sessions = props.sessions
     if (sessions.length === 0) return { startHour: 8, endHour: 20 }
@@ -62,14 +72,21 @@ function Timeline(props: { sessions: AppSession[] }) {
     const { startHour, endHour } = range()
     const totalMinutes = (endHour - startHour) * 60
 
-    return props.sessions.map((s) => {
+    return props.sessions.map((s, i) => {
       const start = new Date(s.started_at)
       const end = new Date(s.ended_at)
       const startMin = (start.getHours() - startHour) * 60 + start.getMinutes()
       const endMin = (end.getHours() - startHour) * 60 + end.getMinutes()
       const left = Math.max(0, (startMin / totalMinutes) * 100)
       const width = Math.max(0.5, ((endMin - startMin) / totalMinutes) * 100)
-      return { left, width }
+      return {
+        left,
+        width,
+        index: i,
+        timeRange: `${formatTimeShort(start)} \u2013 ${formatTimeShort(end)}`,
+        duration: formatDuration(s.duration_secs),
+        title: s.window_title,
+      }
     })
   })
 
@@ -88,14 +105,33 @@ function Timeline(props: { sessions: AppSession[] }) {
   })
 
   return (
-    <div class="timeline">
+    // biome-ignore lint/a11y/noStaticElementInteractions: timeline hover is decorative
+    <div class="timeline" onMouseLeave={() => setHovered(null)}>
       <div class="timeline-track">
         <For each={blocks()}>
           {(block) => (
+            // biome-ignore lint/a11y/noStaticElementInteractions: timeline block hover tooltip
             <div
               class="timeline-block"
+              classList={{ 'timeline-block-active': hovered() === block.index }}
               style={{ left: `${block.left}%`, width: `${block.width}%` }}
-            />
+              onMouseEnter={() => setHovered(block.index)}
+            >
+              <Show when={hovered() === block.index}>
+                <div
+                  class="timeline-tooltip"
+                  classList={{
+                    'timeline-tooltip-right': block.left > 60,
+                  }}
+                >
+                  <span class="timeline-tooltip-time mono">{block.timeRange}</span>
+                  <span class="timeline-tooltip-duration mono">{block.duration}</span>
+                  <Show when={block.title}>
+                    <span class="timeline-tooltip-title">{block.title}</span>
+                  </Show>
+                </div>
+              </Show>
+            </div>
           )}
         </For>
       </div>
@@ -281,6 +317,26 @@ export default function AppDetailView(props: Props) {
             </div>
           )}
         </Show>
+
+        <div class="session-list">
+          <For each={sessions()!}>
+            {(session) => {
+              const start = new Date(session.started_at)
+              const end = new Date(session.ended_at)
+              return (
+                <div class="session-row">
+                  <span class="session-time-range mono">
+                    {formatTimeShort(start)}
+                    <span class="session-arrow">&rarr;</span>
+                    {formatTimeShort(end)}
+                  </span>
+                  <span class="session-duration mono">{formatDuration(session.duration_secs)}</span>
+                  <span class="session-title">{session.window_title}</span>
+                </div>
+              )
+            }}
+          </For>
+        </div>
       </Show>
 
       <Show when={showIgnore()}>
