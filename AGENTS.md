@@ -1,0 +1,97 @@
+# Record: Agent Instructions
+
+Privacy-first macOS activity tracker. Tauri v2 desktop app with a Rust backend and Solid.js frontend.
+
+## Architecture
+
+Monorepo with pnpm workspaces. Two workspace roots: `apps/` for applications and `packages/` for shared code.
+
+```
+apps/desktop/          Tauri v2 app (the only app for now)
+  src/                 Solid.js frontend (Vite, TypeScript)
+  src-tauri/           Rust backend (tracker, store, tray)
+packages/types/        Shared TypeScript interfaces (@record/types)
+```
+
+Everything reusable goes in `packages/`. The types package defines the contract between Rust and TypeScript. If you add a new data shape that both sides need, put the TS interface in `packages/types/src/index.ts` and the matching Rust struct in `apps/desktop/src-tauri/src/types.rs`.
+
+## Tech Stack
+
+| Layer | Tool | Notes |
+|-------|------|-------|
+| Desktop framework | Tauri v2 | Not v1. API differences are significant. |
+| Frontend | Solid.js + Vite | NOT SolidStart. No router. Signal-based view switching. |
+| Backend | Rust | Tracker daemon, SQLite store, tray icon, app icon extraction. |
+| Database | SQLite via rusqlite 0.31 (bundled) | WAL mode. RFC3339 timestamps as TEXT. |
+| Linting/formatting (TS) | Biome | Single config at repo root. |
+| Linting/formatting (Rust) | cargo fmt + clippy | Standard rustfmt, clippy with `-D warnings`. |
+| Pre-commit hooks | Lefthook | Config in `lefthook.yml`. |
+| CI | GitHub Actions | macOS runners (required for Tauri build). |
+
+## Development Commands
+
+All commands run from the repo root:
+
+| Command | What it does |
+|---------|-------------|
+| `pnpm install` | Install all dependencies |
+| `pnpm dev` | Start Tauri dev mode (frontend + backend hot reload) |
+| `pnpm build` | Production build of the Tauri app |
+| `pnpm lint` | Biome check (lint + format) |
+| `pnpm lint:fix` | Biome auto-fix |
+| `pnpm format` | Biome format only |
+| `pnpm typecheck` | TypeScript type checking |
+| `pnpm test` | Run Rust tests |
+| `pnpm clippy` | Run cargo clippy |
+| `pnpm fmt:rust` | Check Rust formatting |
+| `pnpm check` | Run everything (lint, typecheck, fmt:rust, clippy, test) |
+
+## Code Style
+
+TypeScript/TSX: single quotes, no semicolons, 2-space indent, trailing commas. Biome enforces this automatically.
+
+Rust: standard rustfmt (4-space indent). No custom rustfmt.toml.
+
+No inline or block comments. JSDoc only for critical public APIs. Keep code self-documenting.
+
+## Testing
+
+Rust tests live alongside the code in `#[cfg(test)] mod tests {}` blocks. The `SessionStore` and `Tracker` modules have full test coverage. Use `FakeProbe` (implements `SystemProbe` trait) for tracker tests instead of mocking macOS APIs directly.
+
+There are no frontend tests. The app is simple enough that Rust tests cover the important logic. If frontend complexity grows, set up Vitest with solid-testing-library.
+
+When writing new Rust tests, follow the existing pattern: use `tempfile::NamedTempFile` for database tests, `FakeProbe` for tracker tests.
+
+## Key Rust Patterns
+
+The `SystemProbe` trait abstracts macOS system calls (active window, idle time). `MacOSProbe` is the real implementation; `FakeProbe` is for tests. This is the only mock boundary.
+
+Bundle ID resolution: `process_path` from `active-win-pos-rs` gets walked up to find `.app`, then `Contents/Info.plist` is read for `CFBundleIdentifier`. Results are cached in a `HashMap`.
+
+Heartbeat merge logic: if the current app+bundle+idle_state matches the most recent session AND the gap is under `merge_gap_secs` (10s), the existing session is extended. Otherwise a new row is inserted.
+
+App icon extraction: `mdfind` to locate the `.app`, read `CFBundleIconFile` from plist, `sips` to convert `.icns` to `.png`, encode as base64. Cached on disk and in memory.
+
+## Frontend Patterns
+
+`createStore` + `reconcile` with a `key` field prevents list flickering on data refresh. Use `<For>` (not `<Index>`) for lists backed by stores.
+
+The Today view uses dual-rate updates: 5-second backend fetch + 1-second frontend interpolation for live-ticking counters.
+
+View switching uses `Dynamic` with a signal, not a router.
+
+## Design
+
+Matches the stoff.dev palette. Figtree for body text, JetBrains Mono for numbers and code. Dark theme is primary (`#111` bg, `#5ba5f5` accent). Light mode via `prefers-color-scheme`.
+
+## Gotchas
+
+Port 5173/5174 conflicts: kill stale Vite processes before `pnpm dev` or the Tauri webview connects to the wrong port and shows a blank window.
+
+`active-win-pos-rs` 0.9 has `process_path` not `bundle_id`. We resolve bundle IDs ourselves.
+
+The `src-tauri/` directory must be a sibling to the frontend build output. Do not move it.
+
+Window close hides to tray (does not quit). The "Quit" menu item in the tray is the real exit path.
+
+The app needs macOS Accessibility permission for window titles. Without it, app names still work but `title` will be empty.

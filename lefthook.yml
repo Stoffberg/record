@@ -1,0 +1,21 @@
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,tsx,json}"
+      run: pnpm biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
+
+pre-push:
+  parallel: true
+  commands:
+    typecheck:
+      run: pnpm typecheck
+    test:
+      run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml

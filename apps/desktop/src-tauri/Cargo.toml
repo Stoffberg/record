@@ -1,0 +1,33 @@
+[package]
+name = "record"
+version = "0.1.0"
+description = "A privacy-first activity tracker for macOS"
+authors = ["Dirk Beukes"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "record_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-log = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+active-win-pos-rs = "0.9"
+user-idle = "0.6"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+plist = "1.7.4"
+base64 = "0.22.1"
+
+[dev-dependencies]
+tempfile = "3"
