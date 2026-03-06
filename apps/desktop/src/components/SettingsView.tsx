@@ -1,4 +1,5 @@
-import { For } from 'solid-js'
+import { createResource, For, Show } from 'solid-js'
+import { getVersion } from '../lib/api'
 import type { Theme } from '../lib/context'
 import { useApp } from '../lib/context'
 
@@ -10,6 +11,7 @@ const themes: { value: Theme; label: string }[] = [
 
 export default function SettingsView() {
   const { autoStart, toggleAutoStart, theme, setTheme } = useApp()
+  const [version] = createResource(getVersion)
 
   return (
     <div class="settings-view">
@@ -65,7 +67,9 @@ export default function SettingsView() {
               Privacy-first activity tracker. All data stays on your machine.
             </span>
           </div>
-          <span class="setting-value mono">v0.1.0</span>
+          <Show when={version()}>
+            <span class="setting-value mono">v{version()}</span>
+          </Show>
         </div>
       </div>
     </div>

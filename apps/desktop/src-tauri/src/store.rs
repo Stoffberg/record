@@ -130,22 +130,32 @@ impl SessionStore {
     ) -> rusqlite::Result<DailySummary> {
         let (start, end) = day_bounds_utc(date, tz_offset_minutes);
 
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "DELETE FROM app_exclusions WHERE expires_at IS NOT NULL AND expires_at < ?1",
+            rusqlite::params![now],
+        )?;
+
         let (total_active, total_idle) = self.conn.query_row(
             "SELECT
-                COALESCE(SUM(CASE WHEN is_idle = 0 THEN duration_secs ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN is_idle = 1 THEN duration_secs ELSE 0 END), 0)
-             FROM app_sessions
-             WHERE started_at >= ?1 AND started_at < ?2",
+                COALESCE(SUM(CASE WHEN s.is_idle = 0 THEN s.duration_secs ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN s.is_idle = 1 THEN s.duration_secs ELSE 0 END), 0)
+             FROM app_sessions s
+             LEFT JOIN app_exclusions e ON s.bundle_id = e.bundle_id
+             WHERE s.started_at >= ?1 AND s.started_at < ?2
+             AND e.bundle_id IS NULL",
             rusqlite::params![start, end],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT app_name, bundle_id, SUM(duration_secs), COUNT(*)
-             FROM app_sessions
-             WHERE started_at >= ?1 AND started_at < ?2 AND is_idle = 0
-             GROUP BY bundle_id
-             ORDER BY SUM(duration_secs) DESC",
+            "SELECT s.app_name, s.bundle_id, SUM(s.duration_secs), COUNT(*)
+             FROM app_sessions s
+             LEFT JOIN app_exclusions e ON s.bundle_id = e.bundle_id
+             WHERE s.started_at >= ?1 AND s.started_at < ?2 AND s.is_idle = 0
+             AND e.bundle_id IS NULL
+             GROUP BY s.bundle_id
+             ORDER BY SUM(s.duration_secs) DESC",
         )?;
 
         let apps: Vec<AppUsage> = stmt
@@ -569,6 +579,64 @@ mod tests {
             "single active heartbeat has 0 duration"
         );
         assert_eq!(summary.total_idle_secs, 5);
+    }
+
+    #[test]
+    fn excluded_apps_are_hidden_from_daily_summary() {
+        let store = test_store();
+        let t1 = Utc::now();
+        let t2 = t1 + chrono::Duration::seconds(5);
+        let t3 = t2 + chrono::Duration::seconds(15);
+        let t4 = t3 + chrono::Duration::seconds(5);
+
+        store
+            .record_heartbeat(Heartbeat {
+                app_name: "Safari".to_string(),
+                bundle_id: "com.apple.Safari".to_string(),
+                window_title: String::new(),
+                is_idle: false,
+                timestamp: t1,
+            })
+            .unwrap();
+        store
+            .record_heartbeat(Heartbeat {
+                app_name: "Safari".to_string(),
+                bundle_id: "com.apple.Safari".to_string(),
+                window_title: String::new(),
+                is_idle: false,
+                timestamp: t2,
+            })
+            .unwrap();
+        store
+            .record_heartbeat(Heartbeat {
+                app_name: "Code".to_string(),
+                bundle_id: "com.microsoft.VSCode".to_string(),
+                window_title: String::new(),
+                is_idle: false,
+                timestamp: t3,
+            })
+            .unwrap();
+        store
+            .record_heartbeat(Heartbeat {
+                app_name: "Code".to_string(),
+                bundle_id: "com.microsoft.VSCode".to_string(),
+                window_title: String::new(),
+                is_idle: false,
+                timestamp: t4,
+            })
+            .unwrap();
+
+        store
+            .add_exclusion("com.apple.Safari", "Safari", None)
+            .unwrap();
+
+        let date = t1.format("%Y-%m-%d").to_string();
+        let summary = store.get_daily_summary(&date, 0).unwrap();
+
+        assert_eq!(summary.apps.len(), 1, "Safari should be excluded");
+        assert_eq!(summary.apps[0].app_name, "Code");
+        assert_eq!(summary.total_active_secs, 5, "only Code's 5s should count");
+        assert_eq!(summary.total_idle_secs, 0);
     }
 
     #[test]

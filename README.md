@@ -93,8 +93,8 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 - [x] Launch at login (autostart on macOS login)
 - [x] Onboarding screen with Accessibility permission prompt
 - [x] Click a day in monthly view to see that day's breakdown
+- [x] App exclusion list (ignore specific apps from tracking)
 - [ ] Data export (JSON/CSV for backup or LLM analysis)
-- [ ] App exclusion list (ignore specific apps from tracking)
 - [ ] Weekly summary notifications
 - [ ] Homebrew cask distribution
 

@@ -1,4 +1,5 @@
 import type { AppSession, DailySummary } from '@record/types'
+import { getVersion as tauriGetVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import {
   disable as disableAutostart,
@@ -92,4 +93,8 @@ export async function checkAccessibility(): Promise<boolean> {
 
 export async function requestAccessibility(): Promise<boolean> {
   return invoke<boolean>('request_accessibility')
+}
+
+export async function getVersion(): Promise<string> {
+  return tauriGetVersion()
 }
