@@ -57,12 +57,16 @@ jobs:
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          echo "Verifying certificate:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -75,7 +79,45 @@ jobs:
           projectPath: apps/desktop
           tagName: v__VERSION__
           releaseName: "Record v__VERSION__"
-          releaseBody: "See the assets below to download and install."
+          releaseBody: |
+            Install via Homebrew:
+            ```
+            brew install stoffberg/tap/record
+            ```
+            Or download the DMG below.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  update-homebrew:
+    name: Update Homebrew cask
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download release DMGs and compute SHA256
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          gh release download "v${VERSION}" --repo Stoffberg/record --pattern "*.dmg" --dir /tmp/dmgs
+
+          ARM64_SHA=$(shasum -a 256 /tmp/dmgs/Record_${VERSION}_aarch64.dmg | awk '{print $1}')
+          X64_SHA=$(shasum -a 256 /tmp/dmgs/Record_${VERSION}_x64.dmg | awk '{print $1}')
+
+          echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
+          echo "x64_sha=${X64_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Dispatch to homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh api repos/Stoffberg/homebrew-tap/dispatches \
+            -f event_type=update-record-cask \
+            -f "client_payload[version]=${{ steps.version.outputs.version }}" \
+            -f "client_payload[arm64_sha]=${{ steps.sha.outputs.arm64_sha }}" \
+            -f "client_payload[x64_sha]=${{ steps.sha.outputs.x64_sha }}"

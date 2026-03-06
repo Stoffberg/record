@@ -47,6 +47,8 @@ pub struct DailySummary {
 pub struct ProjectUsage {
     pub project: String,
     pub total_secs: i64,
+    pub active_secs: i64,
+    pub agent_secs: i64,
     pub session_count: i64,
     pub details: Vec<ProjectDetail>,
 }
@@ -95,4 +97,37 @@ impl Default for TrackerConfig {
             merge_gap_secs: 10,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSession {
+    pub id: i64,
+    pub agent: String,
+    pub project: String,
+    pub session_ref: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub duration_secs: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentProjectUsage {
+    pub project: String,
+    pub total_secs: i64,
+    pub session_count: i64,
+    pub agents: Vec<AgentUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentUsage {
+    pub agent: String,
+    pub total_secs: i64,
+    pub session_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSummary {
+    pub date: String,
+    pub total_agent_secs: i64,
+    pub projects: Vec<AgentProjectUsage>,
 }

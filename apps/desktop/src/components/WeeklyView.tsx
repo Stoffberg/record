@@ -1,6 +1,6 @@
-import type { AppUsage, DailySummary } from '@record/types'
+import type { AgentSummary, AppUsage, DailySummary } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { getAppIcon, getDailySummary, localDateStr } from '../lib/api'
+import { getAppIcon, getDailyAgentSummary, getDailySummary, localDateStr } from '../lib/api'
 
 function formatTime(secs: number): string {
   const h = Math.floor(secs / 3600)
@@ -55,12 +55,16 @@ interface WeekData {
   days: DailySummary[]
   totalActive: number
   totalIdle: number
+  totalAgent: number
+  dailyAgent: number[]
   appTotals: AppUsage[]
 }
 
-function aggregateWeek(summaries: DailySummary[]): WeekData {
+function aggregateWeek(summaries: DailySummary[], agentSummaries: AgentSummary[]): WeekData {
   let totalActive = 0
   let totalIdle = 0
+  let totalAgent = 0
+  const dailyAgent: number[] = []
   const appMap = new Map<string, AppUsage>()
 
   for (const day of summaries) {
@@ -77,24 +81,40 @@ function aggregateWeek(summaries: DailySummary[]): WeekData {
     }
   }
 
+  for (const agent of agentSummaries) {
+    totalAgent += agent.total_agent_secs
+    dailyAgent.push(agent.total_agent_secs)
+  }
+
   const appTotals = [...appMap.values()]
     .filter((a) => a.total_secs >= 60)
     .sort((a, b) => b.total_secs - a.total_secs)
 
-  return { days: summaries, totalActive, totalIdle, appTotals }
+  return { days: summaries, totalActive, totalIdle, totalAgent, dailyAgent, appTotals }
 }
 
 function emptySummary(date: Date): DailySummary {
   return { date: localDateStr(date), total_active_secs: 0, total_idle_secs: 0, apps: [] }
 }
 
+function emptyAgentSummary(date: Date): AgentSummary {
+  return { date: localDateStr(date), total_agent_secs: 0, projects: [] }
+}
+
 async function fetchWeek(monday: Date): Promise<WeekData> {
   const today = new Date()
   const allDays = Array.from({ length: 7 }, (_, i) => addDays(monday, i))
-  const summaries = await Promise.all(
-    allDays.map((d) => (d <= today ? getDailySummary(d) : Promise.resolve(emptySummary(d)))),
-  )
-  return aggregateWeek(summaries)
+  const [summaries, agentSummaries] = await Promise.all([
+    Promise.all(
+      allDays.map((d) => (d <= today ? getDailySummary(d) : Promise.resolve(emptySummary(d)))),
+    ),
+    Promise.all(
+      allDays.map((d) =>
+        d <= today ? getDailyAgentSummary(d) : Promise.resolve(emptyAgentSummary(d)),
+      ),
+    ),
+  ])
+  return aggregateWeek(summaries, agentSummaries)
 }
 
 function AppIcon(props: { bundleId: string }) {
@@ -172,7 +192,9 @@ export default function WeeklyView() {
   const maxDayActive = createMemo(() => {
     const w = week()
     if (!w) return 1
-    return Math.max(...w.days.map((d) => d.total_active_secs), 1)
+    const maxActive = Math.max(...w.days.map((d) => d.total_active_secs))
+    const maxAgent = w.dailyAgent.length > 0 ? Math.max(...w.dailyAgent) : 0
+    return Math.max(maxActive, maxAgent, 1)
   })
 
   const topAppSecs = createMemo(() => {
@@ -226,7 +248,7 @@ export default function WeeklyView() {
       <Show when={!loading() && week()}>
         {(w) => (
           <>
-            <div class="weekly-stats">
+            <div class="weekly-stats" classList={{ 'has-agent': w().totalAgent > 0 }}>
               <div class="stat-card">
                 <span class="stat-label">Active</span>
                 <span class="stat-value mono">{formatTime(w().totalActive)}</span>
@@ -237,6 +259,12 @@ export default function WeeklyView() {
                   {formatTime(Math.round(w().totalActive / Math.max(w().days.length, 1)))}
                 </span>
               </div>
+              <Show when={w().totalAgent > 0}>
+                <div class="stat-card stat-card-agent">
+                  <span class="stat-label">Agent</span>
+                  <span class="stat-value mono">{formatTime(w().totalAgent)}</span>
+                </div>
+              </Show>
             </div>
 
             <Show when={comparison()}>
@@ -254,7 +282,9 @@ export default function WeeklyView() {
                 {(name, i) => {
                   const day = () => w().days[i()]
                   const secs = () => day()?.total_active_secs ?? 0
+                  const agentSecs = () => w().dailyAgent[i()] ?? 0
                   const pct = () => Math.max(0, (secs() / maxDayActive()) * 100)
+                  const agentPct = () => Math.max(0, (agentSecs() / maxDayActive()) * 100)
                   const today = new Date()
                   const dayDate = () => addDays(monday(), i())
                   const isFuture = () => dayDate() > today
@@ -270,6 +300,9 @@ export default function WeeklyView() {
                     >
                       <div class="weekly-bar-track">
                         <div class="weekly-bar-fill" style={{ height: `${pct()}%` }} />
+                        <Show when={agentSecs() > 0}>
+                          <div class="weekly-bar-agent" style={{ height: `${agentPct()}%` }} />
+                        </Show>
                       </div>
                       <span class="weekly-bar-label mono">{name}</span>
                       <Show when={!isFuture()}>

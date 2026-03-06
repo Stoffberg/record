@@ -30,7 +30,11 @@ Record runs as a background daemon, tracks which apps you use and for how long, 
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/Stoffberg/record/releases), open it, and drag Record to Applications.
+```bash
+brew install stoffberg/tap/record
+```
+
+Or download the latest `.dmg` from [Releases](https://github.com/Stoffberg/record/releases), open it, and drag Record to Applications.
 
 On first launch, macOS will prompt for Accessibility permission. Grant it so Record can read window titles.
 
@@ -94,18 +98,15 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 - [x] Onboarding screen with Accessibility permission prompt
 - [x] Click a day in monthly view to see that day's breakdown
 - [x] App exclusion list (ignore specific apps from tracking)
-- [ ] Date navigation (browse any past day from the Today view)
-- [ ] Keyboard navigation (Cmd+1/2/3 for views, arrow keys for dates, t for today)
-- [ ] View transitions with preloading (fade animations, hover preload)
-- [ ] Weekly summary view with prior week comparison
-- [ ] App categories and productivity score (Productive, Neutral, Distracting)
-- [ ] Default category presets for common apps (Xcode, VS Code, Slack, etc.)
-- [ ] Focus goals (daily targets for productive time or app limits)
-- [ ] Project detection from window titles (editor workspace, browser tab, terminal session)
-- [ ] Session context and tagging (add notes to sessions for work journaling)
-- [ ] Data export (JSON/CSV for backup or LLM analysis)
-- [ ] Weekly digest notification (Monday summary with productivity score)
-- [ ] Homebrew cask distribution
+- [x] Date navigation (browse any past day from the Today view)
+- [x] Keyboard navigation (Cmd+1/2/3 for views, arrow keys for dates, t for today)
+- [x] View transitions with preloading (fade animations, hover preload)
+- [x] Weekly summary view with prior week comparison
+- [x] App categories and productivity score (Productive, Neutral, Distracting)
+- [x] Project detection from window titles (editor workspace, browser tab, terminal session)
+- [x] CSV export per space with date range selection
+- [x] Code signing and notarization for Gatekeeper
+- [x] Homebrew cask distribution (`brew install stoffberg/tap/record`)
 
 ## License
 

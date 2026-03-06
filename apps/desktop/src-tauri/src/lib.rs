@@ -1,14 +1,17 @@
+pub mod agent;
 pub mod project;
 pub mod store;
 pub mod tracker;
 pub mod types;
 
+use agent::{AgentProvider, OpencodeProvider};
 use project::ProjectDetector;
 use store::SessionStore;
 use tracker::{MacOSProbe, Tracker};
 use types::TrackerConfig;
 
 use chrono::{DateTime, Utc};
+use log::error;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -320,6 +323,18 @@ fn get_daily_spaces(
 }
 
 #[tauri::command]
+fn get_daily_agent_summary(
+    state: tauri::State<AppState>,
+    date: String,
+    tz_offset_minutes: i32,
+) -> Result<types::AgentSummary, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_daily_agent_summary(&date, tz_offset_minutes)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn backfill_projects(state: tauri::State<AppState>) -> Result<u64, String> {
     let detector = ProjectDetector::new();
     let store = state.store.lock().map_err(|e| e.to_string())?;
@@ -370,6 +385,22 @@ fn backfill_projects(state: tauri::State<AppState>) -> Result<u64, String> {
     }
 
     Ok(updated)
+}
+
+#[tauri::command]
+fn export_space_csv(
+    state: tauri::State<AppState>,
+    space_id: i64,
+    start_date: String,
+    end_date: String,
+    tz_offset_minutes: i32,
+    file_path: String,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let csv = store
+        .export_space_csv(space_id, &start_date, &end_date, tz_offset_minutes)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&file_path, csv).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -435,9 +466,40 @@ fn macos_accessibility_check(prompt: bool) -> bool {
     }
 }
 
+fn start_agent_scanner(store: Arc<Mutex<SessionStore>>) {
+    let providers: Vec<Box<dyn AgentProvider>> = vec![Box::new(OpencodeProvider)];
+
+    std::thread::spawn(move || loop {
+        for provider in &providers {
+            let cursor = match store.lock() {
+                Ok(s) => s.get_agent_scan_cursor().unwrap_or(0),
+                Err(_) => continue,
+            };
+
+            let slices = provider.scan(cursor);
+            if slices.is_empty() {
+                continue;
+            }
+
+            if let Ok(s) = store.lock() {
+                if let Err(e) = s.upsert_agent_sessions(&slices) {
+                    error!("Failed to upsert agent sessions: {}", e);
+                    continue;
+                }
+                let new_cursor = Utc::now().timestamp_millis();
+                if let Err(e) = s.set_agent_scan_cursor(new_cursor) {
+                    error!("Failed to update agent scan cursor: {}", e);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
@@ -452,6 +514,8 @@ pub fn run() {
 
             let tracker = Tracker::new(store.clone(), ProjectDetector::new(), config);
             tracker.start(MacOSProbe::new());
+
+            start_agent_scanner(store.clone());
 
             let icon_cache_dir = app_data_dir.join("icon_cache");
             std::fs::create_dir_all(&icon_cache_dir)?;
@@ -536,7 +600,9 @@ pub fn run() {
             remove_project_exclusion,
             get_project_exclusions,
             get_daily_spaces,
+            get_daily_agent_summary,
             backfill_projects,
+            export_space_csv,
             check_accessibility,
             request_accessibility
         ])

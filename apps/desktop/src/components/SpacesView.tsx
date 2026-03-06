@@ -1,12 +1,15 @@
 import type { SpaceWithProjects } from '@record/types'
+import { save } from '@tauri-apps/plugin-dialog'
 import { createMemo, createSignal, For, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
 import {
   addProjectToSpace,
   createSpace,
   deleteSpace,
+  exportSpaceCsv,
   getAllProjects,
   getSpaces,
+  localDateStr,
   removeProjectFromSpace,
   updateSpace,
 } from '../lib/api'
@@ -84,6 +87,10 @@ export default function SpacesView() {
 
   const [knownProjects, setKnownProjects] = createSignal<ProjectInfo[]>([])
   const [search, setSearch] = createSignal('')
+  const [exporting, setExporting] = createSignal<number | null>(null)
+  const [exportStart, setExportStart] = createSignal(localDateStr(new Date()))
+  const [exportEnd, setExportEnd] = createSignal(localDateStr(new Date()))
+  const [exportBusy, setExportBusy] = createSignal(false)
 
   async function refresh() {
     const spaces = await getSpaces()
@@ -179,6 +186,27 @@ export default function SpacesView() {
   async function handleUnlink(spaceId: number, project: string) {
     await removeProjectFromSpace(spaceId, project)
     await refresh()
+  }
+
+  function openExport(spaceId: number) {
+    setExporting(exporting() === spaceId ? null : spaceId)
+  }
+
+  async function handleExport(spaceId: number, spaceName: string) {
+    if (exportBusy()) return
+    setExportBusy(true)
+    try {
+      const filePath = await save({
+        title: 'Export CSV',
+        defaultPath: `${spaceName.toLowerCase().replace(/\s+/g, '-')}-${exportStart()}-to-${exportEnd()}.csv`,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      })
+      if (!filePath) return
+      await exportSpaceCsv(spaceId, exportStart(), exportEnd(), filePath)
+    } finally {
+      setExportBusy(false)
+      setExporting(null)
+    }
   }
 
   function toggleExpand(id: number) {
@@ -385,7 +413,64 @@ export default function SpacesView() {
                         <button type="button" class="space-btn-ghost" onClick={() => startEdit(sw)}>
                           Edit
                         </button>
+                        <button
+                          type="button"
+                          class="space-btn-ghost"
+                          onClick={() => openExport(sw.space.id)}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M2 10v3a1 1 0 001 1h10a1 1 0 001-1v-3M8 2v8M5 7l3 3 3-3"
+                              stroke="currentColor"
+                              stroke-width="1.5"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                          Export CSV
+                        </button>
                       </div>
+                      <Show when={exporting() === sw.space.id}>
+                        <div class="space-export-form">
+                          <div class="space-export-dates">
+                            <label class="space-export-label">
+                              From
+                              <input
+                                type="date"
+                                class="space-export-date"
+                                value={exportStart()}
+                                onInput={(e) => setExportStart(e.currentTarget.value)}
+                              />
+                            </label>
+                            <label class="space-export-label">
+                              To
+                              <input
+                                type="date"
+                                class="space-export-date"
+                                value={exportEnd()}
+                                onInput={(e) => setExportEnd(e.currentTarget.value)}
+                              />
+                            </label>
+                          </div>
+                          <div class="space-export-actions">
+                            <button
+                              type="button"
+                              class="space-btn-ghost"
+                              onClick={() => setExporting(null)}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              class="space-btn-primary"
+                              disabled={exportBusy()}
+                              onClick={() => handleExport(sw.space.id, sw.space.name)}
+                            >
+                              {exportBusy() ? 'Exporting...' : 'Save'}
+                            </button>
+                          </div>
+                        </div>
+                      </Show>
                     </Show>
 
                     <Show when={!isEditing()}>

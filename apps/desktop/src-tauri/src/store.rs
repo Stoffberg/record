@@ -1,9 +1,18 @@
+use crate::agent::{merge_intervals, AgentWorkSlice};
 use crate::types::{
-    AppSession, AppUsage, DailySummary, Heartbeat, ProjectDetail, ProjectUsage, Space, SpaceUsage,
-    SpaceWithProjects, TrackerConfig,
+    AgentProjectUsage, AgentSession, AgentSummary, AgentUsage, AppSession, AppUsage, DailySummary,
+    Heartbeat, ProjectDetail, ProjectUsage, Space, SpaceUsage, SpaceWithProjects, TrackerConfig,
 };
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use rusqlite::Connection;
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
 
 fn day_bounds_utc(date: &str, tz_offset_minutes: i32) -> (String, String) {
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
@@ -321,6 +330,8 @@ impl SessionStore {
             result.push(ProjectUsage {
                 project,
                 total_secs,
+                active_secs: total_secs,
+                agent_secs: 0,
                 session_count,
                 details,
             });
@@ -337,26 +348,136 @@ impl SessionStore {
         let (start, end) = day_bounds_utc(date, tz_offset_minutes);
         self.clean_expired_project_exclusions()?;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT s.project, SUM(s.duration_secs), COUNT(*)
+        let day_start_ts = DateTime::parse_from_rfc3339(&start)
+            .unwrap()
+            .with_timezone(&Utc)
+            .timestamp();
+        let day_end_ts = DateTime::parse_from_rfc3339(&end)
+            .unwrap()
+            .with_timezone(&Utc)
+            .timestamp();
+
+        let mut active_stmt = self.conn.prepare(
+            "SELECT s.project, s.started_at, s.ended_at, s.duration_secs
              FROM app_sessions s
              LEFT JOIN project_exclusions pe ON s.project = pe.project
              WHERE s.started_at >= ?1 AND s.started_at < ?2
              AND s.is_idle = 0 AND s.project IS NOT NULL
-             AND pe.project IS NULL
-             GROUP BY s.project
-             HAVING SUM(s.duration_secs) >= 60
-             ORDER BY SUM(s.duration_secs) DESC",
+             AND pe.project IS NULL",
         )?;
 
-        let projects: Vec<(String, i64, i64)> = stmt
-            .query_map(rusqlite::params![start, end], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        struct ActiveRow {
+            project: String,
+            start_ts: i64,
+            end_ts: i64,
+        }
 
-        let mut result = Vec::with_capacity(projects.len());
-        for (project, total_secs, session_count) in projects {
+        let active_rows: Vec<ActiveRow> = active_stmt
+            .query_map(rusqlite::params![start, end], |row| {
+                let started_str: String = row.get(1)?;
+                let ended_str: String = row.get(2)?;
+                let s = DateTime::parse_from_rfc3339(&started_str)
+                    .unwrap()
+                    .with_timezone(&Utc)
+                    .timestamp()
+                    .max(day_start_ts);
+                let e = DateTime::parse_from_rfc3339(&ended_str)
+                    .unwrap()
+                    .with_timezone(&Utc)
+                    .timestamp()
+                    .min(day_end_ts);
+                Ok(ActiveRow {
+                    project: row.get(0)?,
+                    start_ts: s,
+                    end_ts: e,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .filter(|r| r.end_ts > r.start_ts)
+            .collect();
+
+        let mut agent_stmt = self.conn.prepare(
+            "SELECT project, started_at, ended_at
+             FROM agent_sessions
+             WHERE started_at < ?2 AND ended_at > ?1",
+        )?;
+
+        struct AgentRow {
+            project: String,
+            start_ts: i64,
+            end_ts: i64,
+        }
+
+        let agent_rows: Vec<AgentRow> = agent_stmt
+            .query_map(rusqlite::params![start, end], |row| {
+                let started_str: String = row.get(1)?;
+                let ended_str: String = row.get(2)?;
+                let s = DateTime::parse_from_rfc3339(&started_str)
+                    .unwrap()
+                    .with_timezone(&Utc)
+                    .timestamp()
+                    .max(day_start_ts);
+                let e = DateTime::parse_from_rfc3339(&ended_str)
+                    .unwrap()
+                    .with_timezone(&Utc)
+                    .timestamp()
+                    .min(day_end_ts);
+                Ok(AgentRow {
+                    project: row.get(0)?,
+                    start_ts: s,
+                    end_ts: e,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .filter(|r| r.end_ts > r.start_ts)
+            .collect();
+
+        let mut active_map: std::collections::HashMap<String, Vec<(i64, i64)>> =
+            std::collections::HashMap::new();
+        let mut session_counts: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for row in &active_rows {
+            active_map
+                .entry(row.project.clone())
+                .or_default()
+                .push((row.start_ts, row.end_ts));
+            *session_counts.entry(row.project.clone()).or_insert(0) += 1;
+        }
+
+        let mut agent_map: std::collections::HashMap<String, Vec<(i64, i64)>> =
+            std::collections::HashMap::new();
+        for row in &agent_rows {
+            agent_map
+                .entry(row.project.clone())
+                .or_default()
+                .push((row.start_ts, row.end_ts));
+        }
+
+        let all_projects: std::collections::HashSet<String> =
+            active_map.keys().chain(agent_map.keys()).cloned().collect();
+
+        let mut result: Vec<ProjectUsage> = Vec::new();
+
+        for project in &all_projects {
+            let active_intervals = active_map.remove(project).unwrap_or_default();
+            let agent_intervals = agent_map.remove(project).unwrap_or_default();
+
+            let merged_active = merge_intervals(active_intervals.clone());
+            let active_secs: i64 = merged_active.iter().map(|(s, e)| e - s).sum();
+
+            let mut all_intervals = active_intervals.clone();
+            all_intervals.extend(agent_intervals);
+            let merged_all = merge_intervals(all_intervals);
+            let total_secs: i64 = merged_all.iter().map(|(s, e)| e - s).sum();
+
+            let agent_secs = total_secs - active_secs;
+
+            if total_secs < 60 {
+                continue;
+            }
+
+            let session_count = session_counts.get(project).copied().unwrap_or(0);
+
             let mut detail_stmt = self.conn.prepare(
                 "SELECT detail, SUM(duration_secs)
                  FROM app_sessions
@@ -378,12 +499,16 @@ impl SessionStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             result.push(ProjectUsage {
-                project,
+                project: project.clone(),
                 total_secs,
+                active_secs,
+                agent_secs,
                 session_count,
                 details,
             });
         }
+
+        result.sort_by(|a, b| b.total_secs.cmp(&a.total_secs));
 
         Ok(result)
     }
@@ -569,6 +694,61 @@ impl SessionStore {
         Ok(result)
     }
 
+    pub fn export_space_csv(
+        &self,
+        space_id: i64,
+        start_date: &str,
+        end_date: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT project FROM space_projects WHERE space_id = ?1")?;
+        let space_projects: Vec<String> = stmt
+            .query_map(rusqlite::params![space_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+
+        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+
+        let mut csv =
+            String::from("date,project,active_secs,agent_secs,total_secs,session_count\n");
+
+        let mut current = start;
+        while current <= end {
+            let date_str = current.format("%Y-%m-%d").to_string();
+            let projects = self.get_daily_projects(&date_str, tz_offset_minutes)?;
+
+            let project_map: std::collections::HashMap<&str, &ProjectUsage> =
+                projects.iter().map(|p| (p.project.as_str(), p)).collect();
+
+            for sp in &space_projects {
+                match project_map.get(sp.as_str()) {
+                    Some(p) => {
+                        csv.push_str(&format!(
+                            "{},{},{},{},{},{}\n",
+                            date_str,
+                            escape_csv(sp),
+                            p.active_secs,
+                            p.agent_secs,
+                            p.total_secs,
+                            p.session_count,
+                        ));
+                    }
+                    None => {
+                        csv.push_str(&format!("{},{},0,0,0,0\n", date_str, escape_csv(sp)));
+                    }
+                }
+            }
+
+            current += Duration::days(1);
+        }
+
+        Ok(csv)
+    }
+
     pub fn get_all_projects(&self) -> rusqlite::Result<Vec<(String, i64)>> {
         self.clean_expired_project_exclusions()?;
         let mut stmt = self.conn.prepare(
@@ -638,6 +818,162 @@ impl SessionStore {
         Ok(count > 0)
     }
 
+    pub fn get_agent_scan_cursor(&self) -> rusqlite::Result<i64> {
+        let result: rusqlite::Result<i64> = self.conn.query_row(
+            "SELECT last_scanned_ms FROM agent_scan_cursor WHERE id = 1",
+            [],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(ms) => Ok(ms),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn set_agent_scan_cursor(&self, ms: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO agent_scan_cursor (id, last_scanned_ms) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET last_scanned_ms = ?1",
+            rusqlite::params![ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_agent_sessions(&self, slices: &[AgentWorkSlice]) -> rusqlite::Result<()> {
+        let mut seen_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for slice in slices {
+            if seen_refs.insert(&slice.session_ref) {
+                self.conn.execute(
+                    "DELETE FROM agent_sessions WHERE session_ref = ?1",
+                    rusqlite::params![slice.session_ref],
+                )?;
+            }
+        }
+
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO agent_sessions (agent, project, session_ref, started_at, ended_at, duration_secs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+
+        for slice in slices {
+            stmt.execute(rusqlite::params![
+                slice.agent,
+                slice.project,
+                slice.session_ref,
+                slice.started_at.to_rfc3339(),
+                slice.ended_at.to_rfc3339(),
+                slice.duration_secs,
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub fn get_daily_agent_summary(
+        &self,
+        date: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<AgentSummary> {
+        let (start, end) = day_bounds_utc(date, tz_offset_minutes);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent, project, session_ref, started_at, ended_at, duration_secs
+             FROM agent_sessions
+             WHERE started_at < ?2 AND ended_at > ?1
+             ORDER BY project, agent, started_at",
+        )?;
+
+        let sessions: Vec<AgentSession> = stmt
+            .query_map(rusqlite::params![start, end], |row| {
+                let started_str: String = row.get(4)?;
+                let ended_str: String = row.get(5)?;
+                Ok(AgentSession {
+                    id: row.get(0)?,
+                    agent: row.get(1)?,
+                    project: row.get(2)?,
+                    session_ref: row.get(3)?,
+                    started_at: DateTime::parse_from_rfc3339(&started_str)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    ended_at: DateTime::parse_from_rfc3339(&ended_str)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    duration_secs: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let day_start = DateTime::parse_from_rfc3339(&start)
+            .unwrap()
+            .with_timezone(&Utc);
+        let day_end = DateTime::parse_from_rfc3339(&end)
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut project_map: std::collections::HashMap<String, Vec<&AgentSession>> =
+            std::collections::HashMap::new();
+        for session in &sessions {
+            project_map
+                .entry(session.project.clone())
+                .or_default()
+                .push(session);
+        }
+
+        let mut projects: Vec<AgentProjectUsage> = Vec::new();
+        let mut total_agent_secs: i64 = 0;
+
+        for (project, proj_sessions) in &project_map {
+            let all_intervals: Vec<(i64, i64)> = proj_sessions
+                .iter()
+                .map(|s| {
+                    let clamped_start = s.started_at.max(day_start).timestamp();
+                    let clamped_end = s.ended_at.min(day_end).timestamp();
+                    (clamped_start, clamped_end)
+                })
+                .filter(|(s, e)| e > s)
+                .collect();
+
+            let merged = merge_intervals(all_intervals);
+            let deduped_secs: i64 = merged.iter().map(|(s, e)| e - s).sum();
+
+            let mut agent_map: std::collections::HashMap<&str, (i64, i64)> =
+                std::collections::HashMap::new();
+            for session in proj_sessions {
+                let clamped_start = session.started_at.max(day_start).timestamp();
+                let clamped_end = session.ended_at.min(day_end).timestamp();
+                let secs = (clamped_end - clamped_start).max(0);
+                let entry = agent_map.entry(&session.agent).or_insert((0, 0));
+                entry.0 += secs;
+                entry.1 += 1;
+            }
+
+            let agents: Vec<AgentUsage> = agent_map
+                .into_iter()
+                .map(|(agent, (secs, count))| AgentUsage {
+                    agent: agent.to_string(),
+                    total_secs: secs,
+                    session_count: count,
+                })
+                .collect();
+
+            total_agent_secs += deduped_secs;
+            projects.push(AgentProjectUsage {
+                project: project.clone(),
+                total_secs: deduped_secs,
+                session_count: proj_sessions.len() as i64,
+                agents,
+            });
+        }
+
+        projects.sort_by(|a, b| b.total_secs.cmp(&a.total_secs));
+
+        Ok(AgentSummary {
+            date: date.to_string(),
+            total_agent_secs,
+            projects,
+        })
+    }
+
     fn init_schema(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS app_sessions (
@@ -682,6 +1018,24 @@ impl SessionStore {
                 PRIMARY KEY (space_id, project)
             );
             CREATE INDEX IF NOT EXISTS idx_space_projects_project ON space_projects(project);
+
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent TEXT NOT NULL,
+                project TEXT NOT NULL,
+                session_ref TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                duration_secs INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_started ON agent_sessions(started_at);
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_project ON agent_sessions(project);
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_ref ON agent_sessions(session_ref);
+
+            CREATE TABLE IF NOT EXISTS agent_scan_cursor (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_scanned_ms INTEGER NOT NULL
+            );
 
             PRAGMA journal_mode=WAL;",
         )?;
@@ -1136,6 +1490,155 @@ mod tests {
             projects.len(),
             2,
             "should reappear after removing exclusion"
+        );
+    }
+
+    #[test]
+    fn agent_scan_cursor_defaults_to_zero() {
+        let store = test_store();
+        assert_eq!(store.get_agent_scan_cursor().unwrap(), 0);
+    }
+
+    #[test]
+    fn agent_scan_cursor_roundtrip() {
+        let store = test_store();
+        store.set_agent_scan_cursor(1700000000000).unwrap();
+        assert_eq!(store.get_agent_scan_cursor().unwrap(), 1700000000000);
+        store.set_agent_scan_cursor(1700000099000).unwrap();
+        assert_eq!(store.get_agent_scan_cursor().unwrap(), 1700000099000);
+    }
+
+    #[test]
+    fn upsert_agent_sessions_inserts_and_replaces() {
+        use crate::agent::AgentWorkSlice;
+
+        let store = test_store();
+        let t1 = Utc::now();
+        let t2 = t1 + chrono::Duration::seconds(60);
+        let t3 = t2 + chrono::Duration::seconds(120);
+        let t4 = t3 + chrono::Duration::seconds(60);
+
+        let slices = vec![
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "record".to_string(),
+                session_ref: "ses_1".to_string(),
+                started_at: t1,
+                ended_at: t2,
+                duration_secs: 60,
+            },
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "record".to_string(),
+                session_ref: "ses_1".to_string(),
+                started_at: t3,
+                ended_at: t4,
+                duration_secs: 60,
+            },
+        ];
+
+        store.upsert_agent_sessions(&slices).unwrap();
+
+        let date = t1.format("%Y-%m-%d").to_string();
+        let summary = store.get_daily_agent_summary(&date, 0).unwrap();
+        assert_eq!(summary.projects.len(), 1);
+        assert_eq!(summary.projects[0].project, "record");
+        assert_eq!(summary.projects[0].total_secs, 120);
+        assert_eq!(summary.projects[0].session_count, 2);
+
+        let new_slices = vec![AgentWorkSlice {
+            agent: "opencode".to_string(),
+            project: "record".to_string(),
+            session_ref: "ses_1".to_string(),
+            started_at: t1,
+            ended_at: t4,
+            duration_secs: 240,
+        }];
+        store.upsert_agent_sessions(&new_slices).unwrap();
+
+        let summary = store.get_daily_agent_summary(&date, 0).unwrap();
+        assert_eq!(
+            summary.projects[0].session_count, 1,
+            "old rows should be replaced"
+        );
+    }
+
+    #[test]
+    fn agent_summary_deduplicates_overlapping_sessions() {
+        use crate::agent::AgentWorkSlice;
+
+        let store = test_store();
+        let t1 = Utc::now();
+
+        let slices = vec![
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "record".to_string(),
+                session_ref: "ses_a".to_string(),
+                started_at: t1,
+                ended_at: t1 + chrono::Duration::seconds(100),
+                duration_secs: 100,
+            },
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "record".to_string(),
+                session_ref: "ses_b".to_string(),
+                started_at: t1 + chrono::Duration::seconds(50),
+                ended_at: t1 + chrono::Duration::seconds(150),
+                duration_secs: 100,
+            },
+        ];
+
+        store.upsert_agent_sessions(&slices).unwrap();
+
+        let date = t1.format("%Y-%m-%d").to_string();
+        let summary = store.get_daily_agent_summary(&date, 0).unwrap();
+        assert_eq!(summary.projects.len(), 1);
+        assert_eq!(
+            summary.projects[0].total_secs, 150,
+            "overlapping intervals should be deduped to 150s, not 200s"
+        );
+        assert_eq!(summary.total_agent_secs, 150);
+    }
+
+    #[test]
+    fn agent_summary_sums_across_projects() {
+        use crate::agent::AgentWorkSlice;
+
+        let store = test_store();
+        let t1 = Utc::now();
+
+        let slices = vec![
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "record".to_string(),
+                session_ref: "ses_a".to_string(),
+                started_at: t1,
+                ended_at: t1 + chrono::Duration::seconds(100),
+                duration_secs: 100,
+            },
+            AgentWorkSlice {
+                agent: "opencode".to_string(),
+                project: "buddy".to_string(),
+                session_ref: "ses_b".to_string(),
+                started_at: t1,
+                ended_at: t1 + chrono::Duration::seconds(200),
+                duration_secs: 200,
+            },
+        ];
+
+        store.upsert_agent_sessions(&slices).unwrap();
+
+        let date = t1.format("%Y-%m-%d").to_string();
+        let summary = store.get_daily_agent_summary(&date, 0).unwrap();
+        assert_eq!(summary.projects.len(), 2);
+        assert_eq!(
+            summary.total_agent_secs, 300,
+            "different projects should sum: 100 + 200 = 300"
+        );
+        assert_eq!(
+            summary.projects[0].project, "buddy",
+            "sorted by total_secs desc"
         );
     }
 }

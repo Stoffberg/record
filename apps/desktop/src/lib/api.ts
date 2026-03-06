@@ -1,4 +1,5 @@
 import type {
+  AgentSummary,
   AppSession,
   DailySummary,
   ProjectUsage,
@@ -164,6 +165,28 @@ export async function getDailySpaces(date: Date): Promise<SpaceUsage[]> {
   return invoke<SpaceUsage[]>('get_daily_spaces', {
     date: localDateStr(date),
     tzOffsetMinutes: tzOffset(),
+  })
+}
+
+export async function getDailyAgentSummary(date: Date): Promise<AgentSummary> {
+  return invoke<AgentSummary>('get_daily_agent_summary', {
+    date: localDateStr(date),
+    tzOffsetMinutes: tzOffset(),
+  })
+}
+
+export async function exportSpaceCsv(
+  spaceId: number,
+  startDate: string,
+  endDate: string,
+  filePath: string,
+): Promise<void> {
+  await invoke('export_space_csv', {
+    spaceId,
+    startDate,
+    endDate,
+    tzOffsetMinutes: tzOffset(),
+    filePath,
   })
 }
 

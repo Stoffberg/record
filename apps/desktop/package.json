@@ -13,6 +13,7 @@
     "@record/types": "workspace:*",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-sql": "^2.3.2",
     "solid-js": "^1.9.10"
   },

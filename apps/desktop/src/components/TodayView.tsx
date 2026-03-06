@@ -1,7 +1,13 @@
-import type { AppUsage, SpaceUsage } from '@record/types'
+import type { AgentProjectUsage, AppUsage, SpaceUsage } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { addProjectExclusion, getAppIcon, getDailySpaces, getDailySummary } from '../lib/api'
+import {
+  addProjectExclusion,
+  getAppIcon,
+  getDailyAgentSummary,
+  getDailySpaces,
+  getDailySummary,
+} from '../lib/api'
 import AppDetailView from './AppDetailView'
 import { SpaceIcon } from './SpacesView'
 
@@ -72,6 +78,8 @@ function AppIcon(props: { bundleId: string }) {
 interface StoreState {
   activeSecs: number
   idleSecs: number
+  agentSecs: number
+  agentProjects: AgentProjectUsage[]
   apps: AppUsage[]
   ready: boolean
 }
@@ -80,6 +88,8 @@ export default function TodayView() {
   const [state, setState] = createStore<StoreState>({
     activeSecs: 0,
     idleSecs: 0,
+    agentSecs: 0,
+    agentProjects: [],
     apps: [],
     ready: false,
   })
@@ -96,16 +106,19 @@ export default function TodayView() {
 
   async function refresh() {
     try {
-      const [data, spaces] = await Promise.all([
+      const [data, spaces, agentData] = await Promise.all([
         getDailySummary(selectedDate()),
         getDailySpaces(selectedDate()),
+        getDailyAgentSummary(selectedDate()),
       ])
       setState({
         activeSecs: data.total_active_secs,
         idleSecs: data.total_idle_secs,
+        agentSecs: agentData.total_agent_secs,
         ready: true,
       })
       setState('apps', reconcile(data.apps, { key: 'bundle_id' }))
+      setState('agentProjects', reconcile(agentData.projects, { key: 'project' }))
       setSpacesStore('items', reconcile(spaces, { key: 'space' }))
       lastFetchTime = Date.now()
       setElapsed(0)
@@ -176,6 +189,8 @@ export default function TodayView() {
   const liveElapsed = () => (isToday() ? elapsed() : 0)
   const activeTime = () => state.activeSecs + liveElapsed()
   const idleTime = () => state.idleSecs
+  const agentTime = () => state.agentSecs
+  const hasAgentTime = () => state.agentSecs > 0
 
   const visibleApps = createMemo(() => state.apps.filter((a) => a.total_secs >= 60))
 
@@ -228,7 +243,7 @@ export default function TodayView() {
         </header>
 
         <Show when={state.ready}>
-          <div class="today-stats">
+          <div class="today-stats" classList={{ 'has-agent': hasAgentTime() }}>
             <div class="stat-card">
               <span class="stat-label">Active</span>
               <span class="stat-value mono">{formatTime(activeTime())}</span>
@@ -237,6 +252,12 @@ export default function TodayView() {
               <span class="stat-label">Idle</span>
               <span class="stat-value mono">{formatTime(idleTime())}</span>
             </div>
+            <Show when={hasAgentTime()}>
+              <div class="stat-card stat-card-agent">
+                <span class="stat-label">Agent</span>
+                <span class="stat-value mono">{formatTime(agentTime())}</span>
+              </div>
+            </Show>
           </div>
 
           <div class="today-tabs">
@@ -314,6 +335,11 @@ export default function TodayView() {
                           <For each={group.projects}>
                             {(project) => {
                               const pct = () => Math.max(2, (project.total_secs / topSecs()) * 100)
+                              const activePct = () =>
+                                project.total_secs > 0
+                                  ? (project.active_secs / project.total_secs) * pct()
+                                  : pct()
+                              const agentPct = () => pct() - activePct()
                               const projKey = () => `proj:${project.project}`
                               const isExpanded = () => expandedProject() === projKey()
                               const hasDetails = () => project.details.length > 0
@@ -354,6 +380,11 @@ export default function TodayView() {
                                         <span class="app-name">{project.project}</span>
                                         <span class="app-meta mono">
                                           {formatDuration(project.total_secs)}
+                                          <Show when={project.agent_secs > 0}>
+                                            <span class="agent-badge">
+                                              {formatDuration(project.agent_secs)} agent
+                                            </span>
+                                          </Show>
                                           <span class="app-sessions">
                                             {project.session_count} session
                                             {project.session_count !== 1 ? 's' : ''}
@@ -361,7 +392,16 @@ export default function TodayView() {
                                         </span>
                                       </div>
                                       <div class="app-bar-track">
-                                        <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
+                                        <div
+                                          class="app-bar-fill"
+                                          style={{ width: `${activePct()}%` }}
+                                        />
+                                        <Show when={agentPct() > 0}>
+                                          <div
+                                            class="app-bar-fill app-bar-agent"
+                                            style={{ width: `${agentPct()}%` }}
+                                          />
+                                        </Show>
                                       </div>
                                     </div>
                                   </button>

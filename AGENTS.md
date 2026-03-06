@@ -101,6 +101,18 @@ When choosing a detection strategy, prefer stability. A core database schema (li
 
 Always open external databases with `SQLITE_OPEN_READ_ONLY`. Never modify another app's data.
 
+## Agent Time Tracking
+
+The `agent` module tracks AI agent work time alongside regular active time. A background scanner reads external agent databases (currently OpenCode at `~/.local/share/opencode/opencode.db`) every 30 seconds and stores computed work slices in the `agent_sessions` table.
+
+The `AgentProvider` trait abstracts agent sources. Adding a new agent (Claude Code, Cursor, etc.) means implementing the trait and adding it to the providers vec in `start_agent_scanner()`. The store, types, and frontend are agent-agnostic.
+
+Work slices are computed from assistant message timestamps: consecutive messages within 60s are merged into a single block. Sub-second slices are filtered out. Sessions that have been updated since the last scan are recomputed fully (delete + reinsert).
+
+**Time model (mode 2, the default):** Active time and agent time are merged per project using interval union. If you're focused on a project while an agent is also working on it, that counts once (not double). Agent time that doesn't overlap with active time adds to the project total. Both active and agent time are billable. The project bars show the split visually: normal color for active time, lighter accent for agent-only time.
+
+The `ProjectUsage` struct carries `active_secs` (your focus time), `agent_secs` (agent-only time that didn't overlap with focus), and `total_secs` (the union). `total_secs = active_secs + agent_secs` always holds.
+
 ## Design
 
 Matches the stoff.dev palette. Figtree for body text, JetBrains Mono for numbers and code. Dark theme is primary (`#111` bg, `#5ba5f5` accent). Light mode via `prefers-color-scheme`.
