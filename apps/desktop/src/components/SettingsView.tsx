@@ -1,5 +1,5 @@
-import { createResource, For, Show } from 'solid-js'
-import { getVersion } from '../lib/api'
+import { createResource, createSignal, For, Show } from 'solid-js'
+import { backfillProjects, getVersion } from '../lib/api'
 import type { Theme } from '../lib/context'
 import { useApp } from '../lib/context'
 
@@ -12,6 +12,17 @@ const themes: { value: Theme; label: string }[] = [
 export default function SettingsView() {
   const { autoStart, toggleAutoStart, theme, setTheme } = useApp()
   const [version] = createResource(getVersion)
+  const [backfillState, setBackfillState] = createSignal<'idle' | 'running' | number>('idle')
+
+  const runBackfill = async () => {
+    setBackfillState('running')
+    try {
+      const updated = await backfillProjects()
+      setBackfillState(updated)
+    } catch {
+      setBackfillState('idle')
+    }
+  }
 
   return (
     <div class="settings-view">
@@ -69,6 +80,32 @@ export default function SettingsView() {
           </div>
           <Show when={version()}>
             <span class="setting-value mono">v{version()}</span>
+          </Show>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>Debug</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Backfill projects</span>
+            <span class="setting-desc">
+              Re-detect projects for all recorded sessions using latest adapter logic.
+            </span>
+          </div>
+          <Show
+            when={typeof backfillState() === 'number'}
+            fallback={
+              <button
+                class="setting-badge"
+                disabled={backfillState() === 'running'}
+                onClick={runBackfill}
+              >
+                {backfillState() === 'running' ? 'Running…' : 'Run'}
+              </button>
+            }
+          >
+            <span class="setting-value mono">{backfillState() as number} updated</span>
           </Show>
         </div>
       </div>

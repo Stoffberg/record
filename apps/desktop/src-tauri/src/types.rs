@@ -12,6 +12,8 @@ pub struct AppSession {
     pub duration_secs: i64,
     pub is_idle: bool,
     pub metadata: String,
+    pub project: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +23,8 @@ pub struct Heartbeat {
     pub window_title: String,
     pub is_idle: bool,
     pub timestamp: DateTime<Utc>,
+    pub project: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +41,43 @@ pub struct DailySummary {
     pub total_active_secs: i64,
     pub total_idle_secs: i64,
     pub apps: Vec<AppUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectUsage {
+    pub project: String,
+    pub total_secs: i64,
+    pub session_count: i64,
+    pub details: Vec<ProjectDetail>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDetail {
+    pub label: String,
+    pub total_secs: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Space {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub initials: String,
+    pub emoji: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceWithProjects {
+    pub space: Space,
+    pub projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceUsage {
+    pub space: Option<Space>,
+    pub projects: Vec<ProjectUsage>,
+    pub total_secs: i64,
+    pub session_count: i64,
 }
 
 #[derive(Debug, Clone)]

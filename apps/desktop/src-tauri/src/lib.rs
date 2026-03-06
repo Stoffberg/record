@@ -1,7 +1,9 @@
+pub mod project;
 pub mod store;
 pub mod tracker;
 pub mod types;
 
+use project::ProjectDetector;
 use store::SessionStore;
 use tracker::{MacOSProbe, Tracker};
 use types::TrackerConfig;
@@ -182,34 +184,192 @@ fn get_exclusions(
 }
 
 #[tauri::command]
-fn set_app_category(
+fn get_app_projects(
     state: tauri::State<AppState>,
+    date: String,
     bundle_id: String,
-    category: String,
+    tz_offset_minutes: i32,
+) -> Result<Vec<types::ProjectUsage>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_app_projects(&date, &bundle_id, tz_offset_minutes)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_daily_projects(
+    state: tauri::State<AppState>,
+    date: String,
+    tz_offset_minutes: i32,
+) -> Result<Vec<types::ProjectUsage>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_daily_projects(&date, tz_offset_minutes)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_space(
+    state: tauri::State<AppState>,
+    name: String,
+    color: String,
+    initials: String,
+    emoji: Option<String>,
+) -> Result<types::Space, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .create_space(&name, &color, &initials, emoji.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_space(
+    state: tauri::State<AppState>,
+    id: i64,
+    name: String,
+    color: String,
+    initials: String,
+    emoji: Option<String>,
 ) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     store
-        .set_app_category(&bundle_id, &category)
+        .update_space(id, &name, &color, &initials, emoji.as_deref())
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_app_category(
+fn delete_space(state: tauri::State<AppState>, id: i64) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.delete_space(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_spaces(state: tauri::State<AppState>) -> Result<Vec<types::SpaceWithProjects>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.get_spaces().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_project_to_space(
     state: tauri::State<AppState>,
-    bundle_id: String,
-) -> Result<String, String> {
+    space_id: i64,
+    project: String,
+) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     store
-        .get_app_category(&bundle_id)
+        .add_project_to_space(space_id, &project)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_all_categories(
+fn remove_project_from_space(
     state: tauri::State<AppState>,
-) -> Result<Vec<(String, String)>, String> {
+    space_id: i64,
+    project: String,
+) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    store.get_all_categories().map_err(|e| e.to_string())
+    store
+        .remove_project_from_space(space_id, &project)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_all_projects(state: tauri::State<AppState>) -> Result<Vec<(String, i64)>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.get_all_projects().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_project_exclusion(
+    state: tauri::State<AppState>,
+    project: String,
+    expires_at: Option<String>,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .add_project_exclusion(&project, expires_at.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_project_exclusion(state: tauri::State<AppState>, project: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .remove_project_exclusion(&project)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_project_exclusions(
+    state: tauri::State<AppState>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.get_project_exclusions().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_daily_spaces(
+    state: tauri::State<AppState>,
+    date: String,
+    tz_offset_minutes: i32,
+) -> Result<Vec<types::SpaceUsage>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_daily_spaces(&date, tz_offset_minutes)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn backfill_projects(state: tauri::State<AppState>) -> Result<u64, String> {
+    let detector = ProjectDetector::new();
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = store
+        .conn()
+        .prepare(
+            "SELECT id, bundle_id, window_title, started_at
+             FROM app_sessions WHERE is_idle = 0",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows: Vec<(i64, String, String, String)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut updated = 0u64;
+    for (id, bundle_id, window_title, started_at_str) in &rows {
+        let timestamp = chrono::DateTime::parse_from_rfc3339(started_at_str)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+
+        match detector.detect_at(bundle_id, window_title, timestamp) {
+            Some(ctx) => {
+                store
+                    .conn()
+                    .execute(
+                        "UPDATE app_sessions SET project = ?1, detail = ?2 WHERE id = ?3",
+                        rusqlite::params![ctx.project, ctx.detail, id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                updated += 1;
+            }
+            None => {
+                store
+                    .conn()
+                    .execute(
+                        "UPDATE app_sessions SET project = NULL, detail = NULL WHERE id = ?1 AND project IS NOT NULL",
+                        rusqlite::params![id],
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -290,7 +450,7 @@ pub fn run() {
                 SessionStore::new(conn, config.clone()).expect("failed to initialize store"),
             ));
 
-            let tracker = Tracker::new(store.clone(), config);
+            let tracker = Tracker::new(store.clone(), ProjectDetector::new(), config);
             tracker.start(MacOSProbe::new());
 
             let icon_cache_dir = app_data_dir.join("icon_cache");
@@ -363,9 +523,20 @@ pub fn run() {
             add_exclusion,
             remove_exclusion,
             get_exclusions,
-            set_app_category,
-            get_app_category,
-            get_all_categories,
+            get_app_projects,
+            get_daily_projects,
+            create_space,
+            update_space,
+            delete_space,
+            get_spaces,
+            add_project_to_space,
+            remove_project_from_space,
+            get_all_projects,
+            add_project_exclusion,
+            remove_project_exclusion,
+            get_project_exclusions,
+            get_daily_spaces,
+            backfill_projects,
             check_accessibility,
             request_accessibility
         ])

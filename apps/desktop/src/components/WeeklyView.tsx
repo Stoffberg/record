@@ -1,6 +1,6 @@
-import type { AppCategory, AppUsage, DailySummary } from '@record/types'
+import type { AppUsage, DailySummary } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
-import { getAllCategories, getAppIcon, getDailySummary, localDateStr } from '../lib/api'
+import { getAppIcon, getDailySummary, localDateStr } from '../lib/api'
 
 function formatTime(secs: number): string {
   const h = Math.floor(secs / 3600)
@@ -126,20 +126,17 @@ export default function WeeklyView() {
   const [week, setWeek] = createSignal<WeekData | null>(null)
   const [prevWeek, setPrevWeek] = createSignal<WeekData | null>(null)
   const [loading, setLoading] = createSignal(true)
-  const [categories, setCategories] = createSignal<Map<string, AppCategory>>(new Map())
 
   const isThisWeek = () => sameDay(monday(), getMonday(new Date()))
 
   async function load() {
     setLoading(true)
-    const [current, prior, cats] = await Promise.all([
+    const [current, prior] = await Promise.all([
       fetchWeek(monday()),
       fetchWeek(addDays(monday(), -7)),
-      getAllCategories(),
     ])
     setWeek(current)
     setPrevWeek(prior)
-    setCategories(new Map(cats))
     setLoading(false)
   }
 
@@ -157,6 +154,8 @@ export default function WeeklyView() {
   onMount(() => {
     load()
     const keyHandler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
@@ -180,22 +179,6 @@ export default function WeeklyView() {
     const w = week()
     if (!w || w.appTotals.length === 0) return 1
     return Math.max(w.appTotals[0].total_secs, 1)
-  })
-
-  const productivityScore = createMemo(() => {
-    const w = week()
-    const cats = categories()
-    if (!w) return null
-    let productive = 0
-    let distracting = 0
-    for (const app of w.appTotals) {
-      const cat = cats.get(app.bundle_id) ?? 'neutral'
-      if (cat === 'productive') productive += app.total_secs
-      else if (cat === 'distracting') distracting += app.total_secs
-    }
-    const total = productive + distracting
-    if (total === 0) return null
-    return Math.round((productive / total) * 100)
   })
 
   const comparison = createMemo(() => {
@@ -252,12 +235,6 @@ export default function WeeklyView() {
                 <span class="stat-label">Daily avg</span>
                 <span class="stat-value mono">
                   {formatTime(Math.round(w().totalActive / Math.max(w().days.length, 1)))}
-                </span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-label">Productive</span>
-                <span class="stat-value mono">
-                  {productivityScore() !== null ? `${productivityScore()}%` : '\u2014'}
                 </span>
               </div>
             </div>

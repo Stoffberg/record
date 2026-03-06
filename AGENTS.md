@@ -84,6 +84,23 @@ When adding new views, follow this pattern: add the lazy import, add an entry to
 
 Keyboard shortcuts: Cmd+1/2/3/4 switch views. Arrow keys navigate dates in Today and Weekly views. Press `t` to jump to today.
 
+## Project Detection Adapters
+
+Each app that can reveal project context gets its own adapter implementing `ProjectAdapter`. Adding support for a new app means dropping in a new file under `src/project/adapters/`. No big match statements, no central registry logic.
+
+The trait has two extraction methods. `extract(window_title)` is the primary path: parse the window title for a project name (most editors put it right there). `extract_at(window_title, timestamp)` is the fallback for apps where the window title is useless. This is where adapters get creative.
+
+The goal is to detect what the user is working on by any signal available, not just window titles. Think outside the box. Examples of valid detection strategies:
+
+- **Window title parsing**: Zed, VS Code, JetBrains IDEs all put `project — file` in the title bar. Parse the project name out.
+- **Reading another app's database**: OpenCode's window title is just "OpenCode" (useless), but it stores every session with a directory path in `~/.local/share/opencode/opencode.db`. The adapter opens that DB read-only and finds which project was active at the heartbeat timestamp.
+- **Process working directory**: Terminal apps show `user@host: ~/path` in the title, but you could also read the shell process's cwd via `libproc`.
+- **State files**: Some apps write their current workspace to a JSON or plist file. If the format is stable enough, read it.
+
+When choosing a detection strategy, prefer stability. A core database schema (like opencode's `session` table with `directory` and `time_updated`) is unlikely to break. A UI state file with nested JSON blobs will. Process cwd is OS-level and very stable. Window title formats are set by the app and rarely change.
+
+Always open external databases with `SQLITE_OPEN_READ_ONLY`. Never modify another app's data.
+
 ## Design
 
 Matches the stoff.dev palette. Figtree for body text, JetBrains Mono for numbers and code. Dark theme is primary (`#111` bg, `#5ba5f5` accent). Light mode via `prefers-color-scheme`.

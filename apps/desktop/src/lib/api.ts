@@ -1,4 +1,11 @@
-import type { AppCategory, AppSession, DailySummary } from '@record/types'
+import type {
+  AppSession,
+  DailySummary,
+  ProjectUsage,
+  Space,
+  SpaceUsage,
+  SpaceWithProjects,
+} from '@record/types'
 import { getVersion as tauriGetVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -87,16 +94,81 @@ export async function getExclusions(): Promise<[string, string, string | null][]
   return invoke('get_exclusions')
 }
 
-export async function setAppCategory(bundleId: string, category: AppCategory): Promise<void> {
-  await invoke('set_app_category', { bundleId, category })
+export async function getAppProjects(date: Date, bundleId: string): Promise<ProjectUsage[]> {
+  return invoke<ProjectUsage[]>('get_app_projects', {
+    date: localDateStr(date),
+    bundleId,
+    tzOffsetMinutes: tzOffset(),
+  })
 }
 
-export async function getAppCategory(bundleId: string): Promise<AppCategory> {
-  return invoke<AppCategory>('get_app_category', { bundleId })
+export async function getDailyProjects(date: Date): Promise<ProjectUsage[]> {
+  return invoke<ProjectUsage[]>('get_daily_projects', {
+    date: localDateStr(date),
+    tzOffsetMinutes: tzOffset(),
+  })
 }
 
-export async function getAllCategories(): Promise<[string, AppCategory][]> {
-  return invoke<[string, AppCategory][]>('get_all_categories')
+export async function createSpace(
+  name: string,
+  color: string,
+  initials: string,
+  emoji?: string,
+): Promise<Space> {
+  return invoke<Space>('create_space', { name, color, initials, emoji: emoji ?? null })
+}
+
+export async function updateSpace(
+  id: number,
+  name: string,
+  color: string,
+  initials: string,
+  emoji?: string,
+): Promise<void> {
+  await invoke('update_space', { id, name, color, initials, emoji: emoji ?? null })
+}
+
+export async function deleteSpace(id: number): Promise<void> {
+  await invoke('delete_space', { id })
+}
+
+export async function getSpaces(): Promise<SpaceWithProjects[]> {
+  return invoke<SpaceWithProjects[]>('get_spaces')
+}
+
+export async function addProjectToSpace(spaceId: number, project: string): Promise<void> {
+  await invoke('add_project_to_space', { spaceId, project })
+}
+
+export async function removeProjectFromSpace(spaceId: number, project: string): Promise<void> {
+  await invoke('remove_project_from_space', { spaceId, project })
+}
+
+export async function getAllProjects(): Promise<[string, number][]> {
+  return invoke<[string, number][]>('get_all_projects')
+}
+
+export async function addProjectExclusion(project: string, expiresAt?: string): Promise<void> {
+  await invoke('add_project_exclusion', { project, expiresAt: expiresAt ?? null })
+}
+
+export async function removeProjectExclusion(project: string): Promise<void> {
+  await invoke('remove_project_exclusion', { project })
+}
+
+export async function getProjectExclusions(): Promise<[string, string | null][]> {
+  return invoke('get_project_exclusions')
+}
+
+export async function getDailySpaces(date: Date): Promise<SpaceUsage[]> {
+  return invoke<SpaceUsage[]>('get_daily_spaces', {
+    date: localDateStr(date),
+    tzOffsetMinutes: tzOffset(),
+  })
+}
+
+export async function backfillProjects(): Promise<number> {
+  return invoke<number>('backfill_projects')
 }
 
 export async function checkAccessibility(): Promise<boolean> {

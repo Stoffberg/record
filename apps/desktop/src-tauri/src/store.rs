@@ -1,4 +1,7 @@
-use crate::types::{AppSession, AppUsage, DailySummary, Heartbeat, TrackerConfig};
+use crate::types::{
+    AppSession, AppUsage, DailySummary, Heartbeat, ProjectDetail, ProjectUsage, Space, SpaceUsage,
+    SpaceWithProjects, TrackerConfig,
+};
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use rusqlite::Connection;
 
@@ -25,30 +28,47 @@ impl SessionStore {
         Ok(store)
     }
 
-    pub fn record_heartbeat(&self, heartbeat: Heartbeat) -> rusqlite::Result<()> {
-        let ts = heartbeat.timestamp.to_rfc3339();
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
 
-        let merged = self.try_merge(&heartbeat)?;
-        if merged {
+    pub fn record_heartbeat(&self, heartbeat: Heartbeat) -> rusqlite::Result<()> {
+        let prev_ended_at = self.try_merge(&heartbeat)?;
+        if prev_ended_at.is_none() {
             return Ok(());
         }
 
+        let max_interval = self.config.poll_interval_secs as i64;
+        let initial_secs = match prev_ended_at.unwrap() {
+            Some(prev) => {
+                let gap = (heartbeat.timestamp - prev).num_seconds();
+                gap.max(1).min(max_interval)
+            }
+            None => max_interval,
+        };
+
+        let started_at = heartbeat.timestamp - Duration::seconds(initial_secs);
+        let ended_at = heartbeat.timestamp;
+
         self.conn.execute(
-            "INSERT INTO app_sessions (app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, '{}')",
+            "INSERT INTO app_sessions (app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata, project, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', ?8, ?9)",
             rusqlite::params![
                 heartbeat.app_name,
                 heartbeat.bundle_id,
                 heartbeat.window_title,
-                ts,
-                ts,
+                started_at.to_rfc3339(),
+                ended_at.to_rfc3339(),
+                initial_secs,
                 heartbeat.is_idle,
+                heartbeat.project,
+                heartbeat.detail,
             ],
         )?;
         Ok(())
     }
 
-    fn try_merge(&self, heartbeat: &Heartbeat) -> rusqlite::Result<bool> {
+    fn try_merge(&self, heartbeat: &Heartbeat) -> rusqlite::Result<Option<Option<DateTime<Utc>>>> {
         let result: rusqlite::Result<(i64, String, String, String, bool)> = self.conn.query_row(
             "SELECT id, bundle_id, started_at, ended_at, is_idle FROM app_sessions ORDER BY id DESC LIMIT 1",
             [],
@@ -57,21 +77,22 @@ impl SessionStore {
 
         let (id, bundle_id, started_at_str, ended_at_str, is_idle) = match result {
             Ok(row) => row,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Some(None)),
             Err(e) => return Err(e),
         };
-
-        if bundle_id != heartbeat.bundle_id || is_idle != heartbeat.is_idle {
-            return Ok(false);
-        }
 
         let ended_at = DateTime::parse_from_rfc3339(&ended_at_str)
             .unwrap()
             .with_timezone(&Utc);
+
+        if bundle_id != heartbeat.bundle_id || is_idle != heartbeat.is_idle {
+            return Ok(Some(Some(ended_at)));
+        }
+
         let gap = (heartbeat.timestamp - ended_at).num_seconds();
 
         if gap > self.config.merge_gap_secs {
-            return Ok(false);
+            return Ok(Some(Some(ended_at)));
         }
 
         let started_at = DateTime::parse_from_rfc3339(&started_at_str)
@@ -84,7 +105,7 @@ impl SessionStore {
             rusqlite::params![heartbeat.timestamp.to_rfc3339(), new_duration, id],
         )?;
 
-        Ok(true)
+        Ok(None)
     }
 
     pub fn get_sessions(
@@ -93,32 +114,14 @@ impl SessionStore {
         end: DateTime<Utc>,
     ) -> rusqlite::Result<Vec<AppSession>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata
+            "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata, project, detail
              FROM app_sessions
              WHERE started_at >= ?1 AND started_at <= ?2
              ORDER BY started_at ASC",
         )?;
         let rows = stmt.query_map(
             rusqlite::params![start.to_rfc3339(), end.to_rfc3339()],
-            |row| {
-                let started_str: String = row.get(4)?;
-                let ended_str: String = row.get(5)?;
-                Ok(AppSession {
-                    id: row.get(0)?,
-                    app_name: row.get(1)?,
-                    bundle_id: row.get(2)?,
-                    window_title: row.get(3)?,
-                    started_at: DateTime::parse_from_rfc3339(&started_str)
-                        .unwrap()
-                        .with_timezone(&Utc),
-                    ended_at: DateTime::parse_from_rfc3339(&ended_str)
-                        .unwrap()
-                        .with_timezone(&Utc),
-                    duration_secs: row.get(6)?,
-                    is_idle: row.get(7)?,
-                    metadata: row.get(8)?,
-                })
-            },
+            Self::row_to_session,
         )?;
         rows.collect()
     }
@@ -226,30 +229,15 @@ impl SessionStore {
         let (start, end) = day_bounds_utc(date, tz_offset_minutes);
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata
+            "SELECT id, app_name, bundle_id, window_title, started_at, ended_at, duration_secs, is_idle, metadata, project, detail
              FROM app_sessions
              WHERE started_at >= ?1 AND started_at < ?2 AND bundle_id = ?3 AND is_idle = 0
-             ORDER BY started_at ASC",
+             ORDER BY started_at DESC",
         )?;
-        let rows = stmt.query_map(rusqlite::params![start, end, bundle_id], |row| {
-            let started_str: String = row.get(4)?;
-            let ended_str: String = row.get(5)?;
-            Ok(AppSession {
-                id: row.get(0)?,
-                app_name: row.get(1)?,
-                bundle_id: row.get(2)?,
-                window_title: row.get(3)?,
-                started_at: DateTime::parse_from_rfc3339(&started_str)
-                    .unwrap()
-                    .with_timezone(&Utc),
-                ended_at: DateTime::parse_from_rfc3339(&ended_str)
-                    .unwrap()
-                    .with_timezone(&Utc),
-                duration_secs: row.get(6)?,
-                is_idle: row.get(7)?,
-                metadata: row.get(8)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![start, end, bundle_id],
+            Self::row_to_session,
+        )?;
         rows.collect()
     }
 
@@ -282,40 +270,357 @@ impl SessionStore {
         rows.collect()
     }
 
-    pub fn set_app_category(&self, bundle_id: &str, category: &str) -> rusqlite::Result<()> {
-        if category == "neutral" {
-            self.conn.execute(
-                "DELETE FROM app_categories WHERE bundle_id = ?1",
-                rusqlite::params![bundle_id],
+    pub fn get_app_projects(
+        &self,
+        date: &str,
+        bundle_id: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<Vec<ProjectUsage>> {
+        let (start, end) = day_bounds_utc(date, tz_offset_minutes);
+        self.clean_expired_project_exclusions()?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT s.project, SUM(s.duration_secs), COUNT(*)
+             FROM app_sessions s
+             LEFT JOIN project_exclusions pe ON s.project = pe.project
+             WHERE s.started_at >= ?1 AND s.started_at < ?2 AND s.bundle_id = ?3
+             AND s.is_idle = 0 AND s.project IS NOT NULL
+             AND pe.project IS NULL
+             GROUP BY s.project
+             HAVING SUM(s.duration_secs) >= 60
+             ORDER BY SUM(s.duration_secs) DESC",
+        )?;
+
+        let projects: Vec<(String, i64, i64)> = stmt
+            .query_map(rusqlite::params![start, end, bundle_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut result = Vec::with_capacity(projects.len());
+        for (project, total_secs, session_count) in projects {
+            let mut detail_stmt = self.conn.prepare(
+                "SELECT detail, SUM(duration_secs)
+                 FROM app_sessions
+                 WHERE started_at >= ?1 AND started_at < ?2 AND bundle_id = ?3
+                 AND is_idle = 0 AND project = ?4 AND detail IS NOT NULL
+                 GROUP BY detail
+                 HAVING SUM(duration_secs) >= 60
+                 ORDER BY SUM(duration_secs) DESC",
             )?;
-        } else {
-            self.conn.execute(
-                "INSERT OR REPLACE INTO app_categories (bundle_id, category) VALUES (?1, ?2)",
-                rusqlite::params![bundle_id, category],
-            )?;
+
+            let details: Vec<ProjectDetail> = detail_stmt
+                .query_map(rusqlite::params![start, end, bundle_id, project], |row| {
+                    Ok(ProjectDetail {
+                        label: row.get(0)?,
+                        total_secs: row.get(1)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            result.push(ProjectUsage {
+                project,
+                total_secs,
+                session_count,
+                details,
+            });
         }
+
+        Ok(result)
+    }
+
+    pub fn get_daily_projects(
+        &self,
+        date: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<Vec<ProjectUsage>> {
+        let (start, end) = day_bounds_utc(date, tz_offset_minutes);
+        self.clean_expired_project_exclusions()?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT s.project, SUM(s.duration_secs), COUNT(*)
+             FROM app_sessions s
+             LEFT JOIN project_exclusions pe ON s.project = pe.project
+             WHERE s.started_at >= ?1 AND s.started_at < ?2
+             AND s.is_idle = 0 AND s.project IS NOT NULL
+             AND pe.project IS NULL
+             GROUP BY s.project
+             HAVING SUM(s.duration_secs) >= 60
+             ORDER BY SUM(s.duration_secs) DESC",
+        )?;
+
+        let projects: Vec<(String, i64, i64)> = stmt
+            .query_map(rusqlite::params![start, end], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut result = Vec::with_capacity(projects.len());
+        for (project, total_secs, session_count) in projects {
+            let mut detail_stmt = self.conn.prepare(
+                "SELECT detail, SUM(duration_secs)
+                 FROM app_sessions
+                 WHERE started_at >= ?1 AND started_at < ?2
+                 AND is_idle = 0 AND project = ?3 AND detail IS NOT NULL
+                 GROUP BY detail
+                 HAVING SUM(duration_secs) >= 30
+                 ORDER BY SUM(duration_secs) DESC
+                 LIMIT 10",
+            )?;
+
+            let details: Vec<ProjectDetail> = detail_stmt
+                .query_map(rusqlite::params![start, end, project], |row| {
+                    Ok(ProjectDetail {
+                        label: row.get(0)?,
+                        total_secs: row.get(1)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            result.push(ProjectUsage {
+                project,
+                total_secs,
+                session_count,
+                details,
+            });
+        }
+
+        Ok(result)
+    }
+
+    fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<AppSession> {
+        let started_str: String = row.get(4)?;
+        let ended_str: String = row.get(5)?;
+        Ok(AppSession {
+            id: row.get(0)?,
+            app_name: row.get(1)?,
+            bundle_id: row.get(2)?,
+            window_title: row.get(3)?,
+            started_at: DateTime::parse_from_rfc3339(&started_str)
+                .unwrap()
+                .with_timezone(&Utc),
+            ended_at: DateTime::parse_from_rfc3339(&ended_str)
+                .unwrap()
+                .with_timezone(&Utc),
+            duration_secs: row.get(6)?,
+            is_idle: row.get(7)?,
+            metadata: row.get(8)?,
+            project: row.get(9)?,
+            detail: row.get(10)?,
+        })
+    }
+
+    pub fn create_space(
+        &self,
+        name: &str,
+        color: &str,
+        initials: &str,
+        emoji: Option<&str>,
+    ) -> rusqlite::Result<Space> {
+        self.conn.execute(
+            "INSERT INTO spaces (name, color, initials, emoji) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![name, color, initials, emoji],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(Space {
+            id,
+            name: name.to_string(),
+            color: color.to_string(),
+            initials: initials.to_string(),
+            emoji: emoji.map(String::from),
+        })
+    }
+
+    pub fn update_space(
+        &self,
+        id: i64,
+        name: &str,
+        color: &str,
+        initials: &str,
+        emoji: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE spaces SET name = ?1, color = ?2, initials = ?3, emoji = ?4 WHERE id = ?5",
+            rusqlite::params![name, color, initials, emoji, id],
+        )?;
         Ok(())
     }
 
-    pub fn get_app_category(&self, bundle_id: &str) -> rusqlite::Result<String> {
-        let result: rusqlite::Result<String> = self.conn.query_row(
-            "SELECT category FROM app_categories WHERE bundle_id = ?1",
-            rusqlite::params![bundle_id],
-            |row| row.get(0),
-        );
-        match result {
-            Ok(cat) => Ok(cat),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok("neutral".to_string()),
-            Err(e) => Err(e),
-        }
+    pub fn delete_space(&self, id: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM space_projects WHERE space_id = ?1",
+            rusqlite::params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM spaces WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
     }
 
-    pub fn get_all_categories(&self) -> rusqlite::Result<Vec<(String, String)>> {
+    pub fn get_spaces(&self) -> rusqlite::Result<Vec<SpaceWithProjects>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT bundle_id, category FROM app_categories")?;
+            .prepare("SELECT id, name, color, initials, emoji FROM spaces ORDER BY name")?;
+        let spaces: Vec<Space> = stmt
+            .query_map([], |row| {
+                Ok(Space {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    initials: row.get(3)?,
+                    emoji: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut result = Vec::with_capacity(spaces.len());
+        let mut proj_stmt = self
+            .conn
+            .prepare("SELECT project FROM space_projects WHERE space_id = ?1 ORDER BY project")?;
+        for space in spaces {
+            let projects: Vec<String> = proj_stmt
+                .query_map(rusqlite::params![space.id], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            result.push(SpaceWithProjects { space, projects });
+        }
+        Ok(result)
+    }
+
+    pub fn add_project_to_space(&self, space_id: i64, project: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM space_projects WHERE project = ?1",
+            rusqlite::params![project],
+        )?;
+        self.conn.execute(
+            "INSERT INTO space_projects (space_id, project) VALUES (?1, ?2)",
+            rusqlite::params![space_id, project],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_project_from_space(&self, space_id: i64, project: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM space_projects WHERE space_id = ?1 AND project = ?2",
+            rusqlite::params![space_id, project],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_daily_spaces(
+        &self,
+        date: &str,
+        tz_offset_minutes: i32,
+    ) -> rusqlite::Result<Vec<SpaceUsage>> {
+        let projects = self.get_daily_projects(date, tz_offset_minutes)?;
+
+        let mut space_map: std::collections::HashMap<Option<i64>, Vec<ProjectUsage>> =
+            std::collections::HashMap::new();
+        let mut space_lookup: std::collections::HashMap<i64, Space> =
+            std::collections::HashMap::new();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT sp.space_id, s.id, s.name, s.color, s.initials, s.emoji
+             FROM space_projects sp
+             JOIN spaces s ON sp.space_id = s.id
+             WHERE sp.project = ?1",
+        )?;
+
+        for project in projects {
+            let space: Option<Space> = stmt
+                .query_row(rusqlite::params![project.project], |row| {
+                    Ok(Space {
+                        id: row.get(1)?,
+                        name: row.get(2)?,
+                        color: row.get(3)?,
+                        initials: row.get(4)?,
+                        emoji: row.get(5)?,
+                    })
+                })
+                .ok();
+
+            let key = space.as_ref().map(|s| s.id);
+            if let Some(s) = space {
+                space_lookup.entry(s.id).or_insert(s);
+            }
+            space_map.entry(key).or_default().push(project);
+        }
+
+        let mut result: Vec<SpaceUsage> = Vec::new();
+
+        let mut grouped: Vec<(Option<i64>, Vec<ProjectUsage>)> = space_map.into_iter().collect();
+        grouped.sort_by(|a, b| {
+            let a_secs: i64 = a.1.iter().map(|p| p.total_secs).sum();
+            let b_secs: i64 = b.1.iter().map(|p| p.total_secs).sum();
+            b_secs.cmp(&a_secs)
+        });
+
+        for (space_id, projects) in grouped {
+            let total_secs = projects.iter().map(|p| p.total_secs).sum();
+            let session_count = projects.iter().map(|p| p.session_count).sum();
+            let space = space_id.and_then(|id| space_lookup.remove(&id));
+
+            result.push(SpaceUsage {
+                space,
+                projects,
+                total_secs,
+                session_count,
+            });
+        }
+
+        Ok(result)
+    }
+
+    pub fn get_all_projects(&self) -> rusqlite::Result<Vec<(String, i64)>> {
+        self.clean_expired_project_exclusions()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT s.project, SUM(s.duration_secs)
+             FROM app_sessions s
+             LEFT JOIN project_exclusions pe ON s.project = pe.project
+             WHERE s.project IS NOT NULL AND s.is_idle = 0
+             AND pe.project IS NULL
+             GROUP BY s.project
+             HAVING SUM(s.duration_secs) >= 60
+             ORDER BY SUM(s.duration_secs) DESC",
+        )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
+    }
+
+    pub fn add_project_exclusion(
+        &self,
+        project: &str,
+        expires_at: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO project_exclusions (project, expires_at) VALUES (?1, ?2)",
+            rusqlite::params![project, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_project_exclusion(&self, project: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM project_exclusions WHERE project = ?1",
+            rusqlite::params![project],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_project_exclusions(&self) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+        self.clean_expired_project_exclusions()?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT project, expires_at FROM project_exclusions")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clean_expired_project_exclusions(&self) -> rusqlite::Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "DELETE FROM project_exclusions WHERE expires_at IS NOT NULL AND expires_at < ?1",
+            rusqlite::params![now],
+        )?;
+        Ok(())
     }
 
     pub fn is_excluded(&self, bundle_id: &str) -> rusqlite::Result<bool> {
@@ -344,7 +649,9 @@ impl SessionStore {
                 ended_at TEXT NOT NULL,
                 duration_secs INTEGER NOT NULL,
                 is_idle BOOLEAN DEFAULT 0,
-                metadata TEXT DEFAULT '{}'
+                metadata TEXT DEFAULT '{}',
+                project TEXT,
+                detail TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_started ON app_sessions(started_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_bundle ON app_sessions(bundle_id);
@@ -356,13 +663,55 @@ impl SessionStore {
                 expires_at TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS app_categories (
-                bundle_id TEXT PRIMARY KEY,
-                category TEXT NOT NULL DEFAULT 'neutral'
+            CREATE TABLE IF NOT EXISTS project_exclusions (
+                project TEXT PRIMARY KEY,
+                expires_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS spaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL,
+                initials TEXT NOT NULL,
+                emoji TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS space_projects (
+                space_id INTEGER NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+                project TEXT NOT NULL,
+                PRIMARY KEY (space_id, project)
+            );
+            CREATE INDEX IF NOT EXISTS idx_space_projects_project ON space_projects(project);
 
             PRAGMA journal_mode=WAL;",
         )?;
+
+        self.migrate_add_project_columns()?;
+
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON app_sessions(project);",
+        )?;
+
+        Ok(())
+    }
+
+    fn migrate_add_project_columns(&self) -> rusqlite::Result<()> {
+        let has_project: bool = self
+            .conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='app_sessions'")?
+            .query_row([], |row| {
+                let sql: String = row.get(0)?;
+                Ok(sql.contains("project"))
+            })
+            .unwrap_or(false);
+
+        if !has_project {
+            self.conn
+                .execute_batch("ALTER TABLE app_sessions ADD COLUMN project TEXT;")?;
+            self.conn
+                .execute_batch("ALTER TABLE app_sessions ADD COLUMN detail TEXT;")?;
+        }
+
         Ok(())
     }
 }
@@ -386,6 +735,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: Utc::now(),
+            project: None,
+            detail: None,
         }
     }
 
@@ -401,6 +752,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t1,
+            project: None,
+            detail: None,
         };
         let hb2 = Heartbeat {
             app_name: "Safari".to_string(),
@@ -408,6 +761,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t2,
+            project: None,
+            detail: None,
         };
 
         store.record_heartbeat(hb1).unwrap();
@@ -421,8 +776,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(sessions.len(), 1, "should merge into one session");
-        assert_eq!(sessions[0].duration_secs, 5);
-        assert_eq!(sessions[0].started_at, t1);
+        assert_eq!(sessions[0].duration_secs, 10);
+        assert_eq!(sessions[0].started_at, t1 - chrono::Duration::seconds(5));
         assert_eq!(sessions[0].ended_at, t2);
     }
 
@@ -438,6 +793,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t1,
+            project: None,
+            detail: None,
         };
         let hb2 = Heartbeat {
             app_name: "Code".to_string(),
@@ -445,6 +802,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t2,
+            project: None,
+            detail: None,
         };
 
         store.record_heartbeat(hb1).unwrap();
@@ -474,6 +833,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t1,
+            project: None,
+            detail: None,
         };
         let hb2 = Heartbeat {
             app_name: "Safari".to_string(),
@@ -481,6 +842,8 @@ mod tests {
             window_title: String::new(),
             is_idle: false,
             timestamp: t2,
+            project: None,
+            detail: None,
         };
 
         store.record_heartbeat(hb1).unwrap();
@@ -515,6 +878,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t1,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -524,6 +889,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t2,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -533,6 +900,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t3,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -542,6 +911,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t4,
+                project: None,
+                detail: None,
             })
             .unwrap();
 
@@ -549,7 +920,7 @@ mod tests {
         let summary = store.get_daily_summary(&date, 0).unwrap();
 
         assert_eq!(summary.date, date);
-        assert_eq!(summary.total_active_secs, 10);
+        assert_eq!(summary.total_active_secs, 20);
         assert_eq!(summary.total_idle_secs, 0);
         assert_eq!(summary.apps.len(), 2);
 
@@ -558,11 +929,11 @@ mod tests {
             .iter()
             .find(|a| a.app_name == "Safari")
             .unwrap();
-        assert_eq!(safari.total_secs, 5);
+        assert_eq!(safari.total_secs, 10);
         assert_eq!(safari.session_count, 1);
 
         let code = summary.apps.iter().find(|a| a.app_name == "Code").unwrap();
-        assert_eq!(code.total_secs, 5);
+        assert_eq!(code.total_secs, 10);
         assert_eq!(code.session_count, 1);
     }
 
@@ -580,6 +951,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t1,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -589,6 +962,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: true,
                 timestamp: t2,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -598,6 +973,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: true,
                 timestamp: t3,
+                project: None,
+                detail: None,
             })
             .unwrap();
 
@@ -611,15 +988,13 @@ mod tests {
         assert_eq!(sessions.len(), 2, "idle should not merge with active");
         assert!(!sessions[0].is_idle);
         assert!(sessions[1].is_idle);
-        assert_eq!(sessions[1].duration_secs, 5);
+        assert_eq!(sessions[0].duration_secs, 5);
+        assert_eq!(sessions[1].duration_secs, 10);
 
         let date = t1.format("%Y-%m-%d").to_string();
         let summary = store.get_daily_summary(&date, 0).unwrap();
-        assert_eq!(
-            summary.total_active_secs, 0,
-            "single active heartbeat has 0 duration"
-        );
-        assert_eq!(summary.total_idle_secs, 5);
+        assert_eq!(summary.total_active_secs, 5);
+        assert_eq!(summary.total_idle_secs, 10);
     }
 
     #[test]
@@ -637,6 +1012,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t1,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -646,6 +1023,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t2,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -655,6 +1034,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t3,
+                project: None,
+                detail: None,
             })
             .unwrap();
         store
@@ -664,6 +1045,8 @@ mod tests {
                 window_title: String::new(),
                 is_idle: false,
                 timestamp: t4,
+                project: None,
+                detail: None,
             })
             .unwrap();
 
@@ -676,46 +1059,11 @@ mod tests {
 
         assert_eq!(summary.apps.len(), 1, "Safari should be excluded");
         assert_eq!(summary.apps[0].app_name, "Code");
-        assert_eq!(summary.total_active_secs, 5, "only Code's 5s should count");
+        assert_eq!(
+            summary.total_active_secs, 10,
+            "only Code's 10s should count"
+        );
         assert_eq!(summary.total_idle_secs, 0);
-    }
-
-    #[test]
-    fn set_and_get_app_category() {
-        let store = test_store();
-
-        assert_eq!(
-            store.get_app_category("com.apple.Safari").unwrap(),
-            "neutral"
-        );
-
-        store
-            .set_app_category("com.apple.Safari", "productive")
-            .unwrap();
-        assert_eq!(
-            store.get_app_category("com.apple.Safari").unwrap(),
-            "productive"
-        );
-
-        store
-            .set_app_category("com.apple.Safari", "neutral")
-            .unwrap();
-        assert_eq!(
-            store.get_app_category("com.apple.Safari").unwrap(),
-            "neutral"
-        );
-
-        let all = store.get_all_categories().unwrap();
-        assert!(all.is_empty(), "neutral should be deleted from table");
-
-        store
-            .set_app_category("com.apple.Safari", "distracting")
-            .unwrap();
-        store
-            .set_app_category("com.microsoft.VSCode", "productive")
-            .unwrap();
-        let all = store.get_all_categories().unwrap();
-        assert_eq!(all.len(), 2);
     }
 
     #[test]
@@ -733,5 +1081,61 @@ mod tests {
         assert_eq!(sessions[0].app_name, "Safari");
         assert_eq!(sessions[0].bundle_id, "com.apple.Safari");
         assert!(!sessions[0].is_idle);
+    }
+
+    #[test]
+    fn excluded_projects_hidden_from_daily_projects() {
+        let store = test_store();
+        let t1 = Utc::now();
+
+        for i in 0..15 {
+            store
+                .record_heartbeat(Heartbeat {
+                    app_name: "Code".to_string(),
+                    bundle_id: "com.microsoft.VSCode".to_string(),
+                    window_title: String::new(),
+                    is_idle: false,
+                    timestamp: t1 + chrono::Duration::seconds(15 * i),
+                    project: Some("record".to_string()),
+                    detail: None,
+                })
+                .unwrap();
+        }
+
+        for i in 0..15 {
+            store
+                .record_heartbeat(Heartbeat {
+                    app_name: "Code".to_string(),
+                    bundle_id: "com.microsoft.VSCode".to_string(),
+                    window_title: String::new(),
+                    is_idle: false,
+                    timestamp: t1 + chrono::Duration::seconds(300 + 15 * i),
+                    project: Some("noisy".to_string()),
+                    detail: None,
+                })
+                .unwrap();
+        }
+
+        let date = t1.format("%Y-%m-%d").to_string();
+        let projects = store.get_daily_projects(&date, 0).unwrap();
+        assert_eq!(projects.len(), 2);
+
+        store.add_project_exclusion("noisy", None).unwrap();
+
+        let projects = store.get_daily_projects(&date, 0).unwrap();
+        assert_eq!(projects.len(), 1, "excluded project should be hidden");
+        assert_eq!(projects[0].project, "record");
+
+        let all = store.get_all_projects().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, "record");
+
+        store.remove_project_exclusion("noisy").unwrap();
+        let projects = store.get_daily_projects(&date, 0).unwrap();
+        assert_eq!(
+            projects.len(),
+            2,
+            "should reappear after removing exclusion"
+        );
     }
 }

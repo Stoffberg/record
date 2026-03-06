@@ -5,17 +5,17 @@ import './index.css'
 
 const TodayView = lazy(() => import('./components/TodayView'))
 const WeeklyView = lazy(() => import('./components/WeeklyView'))
-const MonthlyView = lazy(() => import('./components/MonthlyView'))
+const SpacesView = lazy(() => import('./components/SpacesView'))
 const SettingsView = lazy(() => import('./components/SettingsView'))
 
-type View = 'today' | 'weekly' | 'monthly' | 'settings'
+type View = 'today' | 'weekly' | 'spaces' | 'settings'
 
-const viewOrder: View[] = ['today', 'weekly', 'monthly', 'settings']
+const viewOrder: View[] = ['today', 'weekly', 'spaces', 'settings']
 
 const lazyViews = {
   today: TodayView,
   weekly: WeeklyView,
-  monthly: MonthlyView,
+  spaces: SpacesView,
   settings: SettingsView,
 } as const
 
@@ -106,17 +106,50 @@ function App() {
             Weekly
           </button>
           <button
-            classList={{ active: view() === 'monthly' }}
-            onClick={() => switchView('monthly')}
-            onMouseEnter={() => preloadView('monthly')}
-            onFocus={() => preloadView('monthly')}
+            classList={{ active: view() === 'spaces' }}
+            onClick={() => switchView('spaces')}
+            onMouseEnter={() => preloadView('spaces')}
+            onFocus={() => preloadView('spaces')}
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-              <rect x="2" y="5" width="3" height="9" rx="1" fill="currentColor" opacity="0.4" />
-              <rect x="6.5" y="2" width="3" height="12" rx="1" fill="currentColor" opacity="0.6" />
-              <rect x="11" y="7" width="3" height="7" rx="1" fill="currentColor" opacity="0.8" />
+              <rect
+                x="1.5"
+                y="1.5"
+                width="5"
+                height="5"
+                rx="1.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+              />
+              <rect
+                x="9.5"
+                y="1.5"
+                width="5"
+                height="5"
+                rx="1.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+              />
+              <rect
+                x="1.5"
+                y="9.5"
+                width="5"
+                height="5"
+                rx="1.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+              />
+              <rect
+                x="9.5"
+                y="9.5"
+                width="5"
+                height="5"
+                rx="1.5"
+                stroke="currentColor"
+                stroke-width="1.5"
+              />
             </svg>
-            Monthly
+            Spaces
           </button>
           <div class="sidebar-spacer" />
           <button
@@ -146,9 +179,9 @@ function App() {
               <WeeklyView />
             </div>
           </Show>
-          <Show when={visited().has('monthly')}>
-            <div class="view-panel" style={{ display: view() === 'monthly' ? 'block' : 'none' }}>
-              <MonthlyView />
+          <Show when={visited().has('spaces')}>
+            <div class="view-panel" style={{ display: view() === 'spaces' ? 'block' : 'none' }}>
+              <SpacesView />
             </div>
           </Show>
           <Show when={visited().has('settings')}>

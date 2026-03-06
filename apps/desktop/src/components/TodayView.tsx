@@ -1,8 +1,9 @@
-import type { AppCategory, AppUsage } from '@record/types'
+import type { AppUsage, SpaceUsage } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { getAllCategories, getAppIcon, getDailySummary } from '../lib/api'
+import { addProjectExclusion, getAppIcon, getDailySpaces, getDailySummary } from '../lib/api'
 import AppDetailView from './AppDetailView'
+import { SpaceIcon } from './SpacesView'
 
 function formatDuration(secs: number): string {
   if (secs < 60) return `${secs}s`
@@ -85,25 +86,27 @@ export default function TodayView() {
   const [elapsed, setElapsed] = createSignal(0)
   const [selectedDate, setSelectedDate] = createSignal(new Date())
   const [selectedApp, setSelectedApp] = createSignal<AppUsage | null>(null)
-  const [categories, setCategories] = createSignal<Map<string, AppCategory>>(new Map())
+  const [tab, setTab] = createSignal<'apps' | 'projects'>('apps')
+  const [spacesStore, setSpacesStore] = createStore<{ items: SpaceUsage[] }>({ items: [] })
+  const [expandedProject, setExpandedProject] = createSignal<string | null>(null)
+  const [ignoringProject, setIgnoringProject] = createSignal<string | null>(null)
   let lastFetchTime = 0
 
   const isToday = () => sameDay(selectedDate(), new Date())
 
-  async function refreshCategories() {
-    const cats = await getAllCategories()
-    setCategories(new Map(cats))
-  }
-
   async function refresh() {
     try {
-      const data = await getDailySummary(selectedDate())
+      const [data, spaces] = await Promise.all([
+        getDailySummary(selectedDate()),
+        getDailySpaces(selectedDate()),
+      ])
       setState({
         activeSecs: data.total_active_secs,
         idleSecs: data.total_idle_secs,
         ready: true,
       })
       setState('apps', reconcile(data.apps, { key: 'bundle_id' }))
+      setSpacesStore('items', reconcile(spaces, { key: 'space' }))
       lastFetchTime = Date.now()
       setElapsed(0)
     } catch {
@@ -136,7 +139,6 @@ export default function TodayView() {
 
   onMount(() => {
     refresh()
-    refreshCategories()
     const fetchId = setInterval(() => {
       if (isToday()) refresh()
     }, 5000)
@@ -147,6 +149,8 @@ export default function TodayView() {
     }, 1000)
 
     const keyHandler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       if (selectedApp()) return
       if (e.key === 'ArrowLeft') {
@@ -175,21 +179,6 @@ export default function TodayView() {
 
   const visibleApps = createMemo(() => state.apps.filter((a) => a.total_secs >= 60))
 
-  const productivityScore = createMemo(() => {
-    const apps = visibleApps()
-    const cats = categories()
-    let productive = 0
-    let distracting = 0
-    for (const app of apps) {
-      const cat = cats.get(app.bundle_id) ?? 'neutral'
-      if (cat === 'productive') productive += app.total_secs
-      else if (cat === 'distracting') distracting += app.total_secs
-    }
-    const total = productive + distracting
-    if (total === 0) return null
-    return Math.round((productive / total) * 100)
-  })
-
   const topAppSecs = createMemo(() => {
     const apps = visibleApps()
     if (apps.length === 0) return 1
@@ -203,10 +192,7 @@ export default function TodayView() {
         <AppDetailView
           app={selectedApp()!}
           date={selectedDate()}
-          onBack={() => {
-            setSelectedApp(null)
-            refreshCategories()
-          }}
+          onBack={() => setSelectedApp(null)}
         />
       }
     >
@@ -251,52 +237,308 @@ export default function TodayView() {
               <span class="stat-label">Idle</span>
               <span class="stat-value mono">{formatTime(idleTime())}</span>
             </div>
-            <div class="stat-card">
-              <span class="stat-label">Productive</span>
-              <span class="stat-value mono">
-                {productivityScore() !== null ? `${productivityScore()}%` : '\u2014'}
-              </span>
+          </div>
+
+          <div class="today-tabs">
+            <div class="segment-control">
+              <button classList={{ active: tab() === 'apps' }} onClick={() => setTab('apps')}>
+                Apps
+              </button>
+              <button
+                classList={{ active: tab() === 'projects' }}
+                onClick={() => setTab('projects')}
+              >
+                Projects
+              </button>
             </div>
           </div>
 
           <Show
-            when={visibleApps().length > 0}
+            when={tab() === 'apps' ? visibleApps().length > 0 : spacesStore.items.length > 0}
             fallback={
               <div class="today-empty">
-                {isToday() ? 'No activity recorded yet. Keep working.' : 'No activity recorded.'}
+                {tab() === 'apps'
+                  ? isToday()
+                    ? 'No activity recorded yet. Keep working.'
+                    : 'No activity recorded.'
+                  : 'No projects detected.'}
               </div>
             }
           >
-            <div class="app-list">
-              <For each={visibleApps()}>
-                {(app, i) => {
-                  const liveSecs = () =>
-                    i() === 0 ? app.total_secs + liveElapsed() : app.total_secs
-                  const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)
-                  return (
-                    <button type="button" class="app-row" onClick={() => setSelectedApp(app)}>
-                      <div class="app-bar-accent" style={{ height: `${pct()}%` }} />
-                      <AppIcon bundleId={app.bundle_id} />
-                      <div class="app-body">
-                        <div class="app-info">
-                          <span class="app-name">{app.app_name}</span>
-                          <span class="app-meta mono">
-                            {formatDuration(liveSecs())}
-                            <span class="app-sessions">
-                              {app.session_count} session{app.session_count !== 1 ? 's' : ''}
+            <Show when={tab() === 'apps'}>
+              <div class="app-list">
+                <For each={visibleApps()}>
+                  {(app, i) => {
+                    const liveSecs = () =>
+                      i() === 0 ? app.total_secs + liveElapsed() : app.total_secs
+                    const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)
+                    return (
+                      <button type="button" class="app-row" onClick={() => setSelectedApp(app)}>
+                        <div class="app-bar-accent" style={{ height: `${pct()}%` }} />
+                        <AppIcon bundleId={app.bundle_id} />
+                        <div class="app-body">
+                          <div class="app-info">
+                            <span class="app-name">{app.app_name}</span>
+                            <span class="app-meta mono">
+                              {formatDuration(liveSecs())}
+                              <span class="app-sessions">
+                                {app.session_count} session{app.session_count !== 1 ? 's' : ''}
+                              </span>
                             </span>
-                          </span>
+                          </div>
+                          <div class="app-bar-track">
+                            <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
+                          </div>
                         </div>
-                        <div class="app-bar-track">
-                          <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
+                      </button>
+                    )
+                  }}
+                </For>
+              </div>
+            </Show>
+
+            <Show when={tab() === 'projects'}>
+              <div class="app-list">
+                <For each={spacesStore.items}>
+                  {(group) => {
+                    const topSecs = () => Math.max(spacesStore.items[0]?.total_secs ?? 1, 1)
+
+                    const isSpaceGroup = () => group.space !== null
+                    const groupKey = () => (group.space ? `space:${group.space.id}` : 'ungrouped')
+                    const isGroupExpanded = () => expandedProject() === groupKey()
+
+                    return (
+                      <Show
+                        when={isSpaceGroup()}
+                        fallback={
+                          <For each={group.projects}>
+                            {(project) => {
+                              const pct = () => Math.max(2, (project.total_secs / topSecs()) * 100)
+                              const projKey = () => `proj:${project.project}`
+                              const isExpanded = () => expandedProject() === projKey()
+                              const hasDetails = () => project.details.length > 0
+                              return (
+                                <div class="project-row-wrap">
+                                  <button
+                                    type="button"
+                                    class="app-row"
+                                    classList={{ 'project-row-no-details': !hasDetails() }}
+                                    onClick={() =>
+                                      hasDetails() &&
+                                      setExpandedProject(isExpanded() ? null : projKey())
+                                    }
+                                  >
+                                    <div class="app-bar-accent" style={{ height: `${pct()}%` }} />
+                                    <div class="project-icon-placeholder">
+                                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <rect
+                                          x="3"
+                                          y="5"
+                                          width="14"
+                                          height="11"
+                                          rx="2"
+                                          stroke="currentColor"
+                                          stroke-width="1.5"
+                                          fill="none"
+                                        />
+                                        <path
+                                          d="M7 5V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1"
+                                          stroke="currentColor"
+                                          stroke-width="1.5"
+                                          fill="none"
+                                        />
+                                      </svg>
+                                    </div>
+                                    <div class="app-body">
+                                      <div class="app-info">
+                                        <span class="app-name">{project.project}</span>
+                                        <span class="app-meta mono">
+                                          {formatDuration(project.total_secs)}
+                                          <span class="app-sessions">
+                                            {project.session_count} session
+                                            {project.session_count !== 1 ? 's' : ''}
+                                          </span>
+                                        </span>
+                                      </div>
+                                      <div class="app-bar-track">
+                                        <div class="app-bar-fill" style={{ width: `${pct()}%` }} />
+                                      </div>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="project-ignore-btn"
+                                    title="Ignore this project"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setIgnoringProject(project.project)
+                                    }}
+                                  >
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                      <circle
+                                        cx="8"
+                                        cy="8"
+                                        r="6.5"
+                                        stroke="currentColor"
+                                        stroke-width="1.5"
+                                      />
+                                      <line
+                                        x1="3.5"
+                                        y1="12.5"
+                                        x2="12.5"
+                                        y2="3.5"
+                                        stroke="currentColor"
+                                        stroke-width="1.5"
+                                        stroke-linecap="round"
+                                      />
+                                    </svg>
+                                  </button>
+                                  <Show when={isExpanded()}>
+                                    <div class="project-details">
+                                      <For each={project.details}>
+                                        {(detail) => (
+                                          <div class="project-detail-row">
+                                            <span class="project-detail-label">{detail.label}</span>
+                                            <span class="project-detail-duration mono">
+                                              {formatDuration(detail.total_secs)}
+                                            </span>
+                                          </div>
+                                        )}
+                                      </For>
+                                    </div>
+                                  </Show>
+                                </div>
+                              )
+                            }}
+                          </For>
+                        }
+                      >
+                        <div>
+                          <button
+                            type="button"
+                            class="app-row"
+                            onClick={() =>
+                              setExpandedProject(isGroupExpanded() ? null : groupKey())
+                            }
+                          >
+                            <div
+                              class="app-bar-accent"
+                              style={{
+                                height: `${Math.max(2, (group.total_secs / topSecs()) * 100)}%`,
+                              }}
+                            />
+                            <SpaceIcon
+                              color={group.space!.color}
+                              initials={group.space!.initials}
+                              emoji={group.space!.emoji}
+                              size={20}
+                            />
+                            <div class="app-body">
+                              <div class="app-info">
+                                <span class="app-name">{group.space!.name}</span>
+                                <span class="app-meta mono">
+                                  {formatDuration(group.total_secs)}
+                                  <span class="app-sessions">
+                                    {group.projects.length} project
+                                    {group.projects.length !== 1 ? 's' : ''}
+                                  </span>
+                                </span>
+                              </div>
+                              <div class="app-bar-track">
+                                <div
+                                  class="app-bar-fill"
+                                  style={{
+                                    width: `${Math.max(2, (group.total_secs / topSecs()) * 100)}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </button>
+                          <Show when={isGroupExpanded()}>
+                            <div class="project-details">
+                              <For each={group.projects}>
+                                {(project) => (
+                                  <div class="project-detail-row">
+                                    <span class="project-detail-label">{project.project}</span>
+                                    <span class="project-detail-duration mono">
+                                      {formatDuration(project.total_secs)}
+                                    </span>
+                                  </div>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
                         </div>
-                      </div>
-                    </button>
-                  )
-                }}
-              </For>
-            </div>
+                      </Show>
+                    )
+                  }}
+                </For>
+              </div>
+            </Show>
           </Show>
+        </Show>
+
+        <Show when={ignoringProject()}>
+          {(project) => (
+            <div
+              class="modal-overlay"
+              role="dialog"
+              onClick={() => setIgnoringProject(null)}
+              onKeyDown={() => setIgnoringProject(null)}
+            >
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: modal stop propagation */}
+              <div class="modal" role="dialog" onClick={(e) => e.stopPropagation()}>
+                <h3 class="modal-title">Ignore {project()}?</h3>
+                <p class="modal-desc">This project won't appear in your activity tracking.</p>
+                <div class="modal-actions">
+                  <button
+                    type="button"
+                    class="modal-btn"
+                    onClick={async () => {
+                      const d = new Date()
+                      d.setHours(d.getHours() + 1)
+                      await addProjectExclusion(project(), d.toISOString())
+                      setIgnoringProject(null)
+                      refresh()
+                    }}
+                  >
+                    For 1 hour
+                  </button>
+                  <button
+                    type="button"
+                    class="modal-btn"
+                    onClick={async () => {
+                      const d = new Date()
+                      d.setHours(d.getHours() + 4)
+                      await addProjectExclusion(project(), d.toISOString())
+                      setIgnoringProject(null)
+                      refresh()
+                    }}
+                  >
+                    For 4 hours
+                  </button>
+                  <button
+                    type="button"
+                    class="modal-btn modal-btn-accent"
+                    onClick={async () => {
+                      await addProjectExclusion(project())
+                      setIgnoringProject(null)
+                      refresh()
+                    }}
+                  >
+                    Always
+                  </button>
+                  <button
+                    type="button"
+                    class="modal-btn modal-btn-dim"
+                    onClick={() => setIgnoringProject(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </Show>
       </div>
     </Show>

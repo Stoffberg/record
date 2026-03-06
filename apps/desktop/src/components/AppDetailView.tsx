@@ -1,12 +1,11 @@
-import type { AppCategory, AppSession, AppUsage } from '@record/types'
+import type { AppSession, AppUsage } from '@record/types'
 import { createMemo, createResource, createSignal, For, onMount, Show } from 'solid-js'
 import {
   addExclusion,
   getAppAverages,
-  getAppCategory,
   getAppIcon,
+  getAppProjects,
   getAppSessions,
-  setAppCategory,
 } from '../lib/api'
 
 function formatDuration(secs: number): string {
@@ -64,13 +63,19 @@ function Timeline(props: { sessions: AppSession[] }) {
     const sessions = props.sessions
     if (sessions.length === 0) return { startHour: 8, endHour: 20 }
 
-    const firstStart = new Date(sessions[0].started_at)
-    const lastEnd = new Date(sessions[sessions.length - 1].ended_at)
-    const now = new Date()
-    const endTime = lastEnd > now ? lastEnd : now
+    let earliest = Infinity
+    let latest = -Infinity
+    for (const s of sessions) {
+      const st = new Date(s.started_at).getTime()
+      const et = new Date(s.ended_at).getTime()
+      if (st < earliest) earliest = st
+      if (et > latest) latest = et
+    }
+    const now = Date.now()
+    if (now > latest) latest = now
 
-    const startHour = Math.max(0, firstStart.getHours() - 1)
-    const endHour = Math.min(24, endTime.getHours() + 2)
+    const startHour = Math.max(0, new Date(earliest).getHours() - 1)
+    const endHour = Math.min(24, new Date(latest).getHours() + 2)
 
     return { startHour, endHour }
   })
@@ -92,7 +97,8 @@ function Timeline(props: { sessions: AppSession[] }) {
         index: i,
         timeRange: `${formatTimeShort(start)} \u2013 ${formatTimeShort(end)}`,
         duration: formatDuration(s.duration_secs),
-        title: s.window_title,
+        project: s.project ?? null,
+        detail: s.detail ?? null,
       }
     })
   })
@@ -144,8 +150,11 @@ function Timeline(props: { sessions: AppSession[] }) {
           >
             <span class="timeline-tooltip-time mono">{block().timeRange}</span>
             <span class="timeline-tooltip-duration mono">{block().duration}</span>
-            <Show when={block().title}>
-              <span class="timeline-tooltip-title">{block().title}</span>
+            <Show when={block().project}>
+              <span class="timeline-tooltip-project">{block().project}</span>
+            </Show>
+            <Show when={block().detail}>
+              <span class="timeline-tooltip-detail">{block().detail}</span>
             </Show>
           </div>
         )}
@@ -213,18 +222,8 @@ interface Props {
   onBack: () => void
 }
 
-const CATEGORIES: { value: AppCategory; label: string }[] = [
-  { value: 'productive', label: 'Productive' },
-  { value: 'neutral', label: 'Neutral' },
-  { value: 'distracting', label: 'Distracting' },
-]
-
 export default function AppDetailView(props: Props) {
   const [showIgnore, setShowIgnore] = createSignal(false)
-  const [categoryResource, { mutate: mutateCategory }] = createResource(
-    () => props.app.bundle_id,
-    (bundleId) => getAppCategory(bundleId),
-  )
   const [sessions] = createResource(
     () => ({ bundleId: props.app.bundle_id, date: props.date }),
     ({ bundleId, date }) => getAppSessions(date, bundleId),
@@ -233,27 +232,32 @@ export default function AppDetailView(props: Props) {
     () => ({ bundleId: props.app.bundle_id, date: props.date }),
     ({ bundleId, date }) => getAppAverages(date, bundleId),
   )
-
-  async function handleCategoryChange(cat: AppCategory) {
-    mutateCategory(cat)
-    await setAppCategory(props.app.bundle_id, cat)
-  }
+  const [projects] = createResource(
+    () => ({ bundleId: props.app.bundle_id, date: props.date }),
+    ({ bundleId, date }) => getAppProjects(date, bundleId),
+  )
 
   const stats = createMemo(() => {
     const s = sessions()
     if (!s || s.length === 0) return null
     const longest = Math.max(...s.map((x) => x.duration_secs))
-    const first = new Date(s[0].started_at)
-    const last = new Date(s[s.length - 1].ended_at)
+    let earliest = new Date(s[0].started_at)
+    let latest = new Date(s[0].ended_at)
+    for (const sess of s) {
+      const st = new Date(sess.started_at)
+      const et = new Date(sess.ended_at)
+      if (st < earliest) earliest = st
+      if (et > latest) latest = et
+    }
     return {
       sessions: s.length,
       longest,
-      firstUsed: first.toLocaleTimeString('en-US', {
+      firstUsed: earliest.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
       }),
-      lastUsed: last.toLocaleTimeString('en-US', {
+      lastUsed: latest.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
@@ -302,27 +306,6 @@ export default function AppDetailView(props: Props) {
         </button>
       </header>
 
-      <Show when={categoryResource()}>
-        {(currentCat) => (
-          <div class="category-picker">
-            <span class="category-picker-label">Category</span>
-            <div class="segment-control">
-              <For each={CATEGORIES}>
-                {(cat) => (
-                  <button
-                    type="button"
-                    classList={{ active: currentCat() === cat.value }}
-                    onClick={() => handleCategoryChange(cat.value)}
-                  >
-                    {cat.label}
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-        )}
-      </Show>
-
       <Show
         when={sessions() && sessions()!.length > 0}
         fallback={<div class="today-empty">No sessions recorded today.</div>}
@@ -370,25 +353,44 @@ export default function AppDetailView(props: Props) {
           )}
         </Show>
 
-        <div class="session-list">
-          <For each={sessions()!}>
-            {(session) => {
-              const start = new Date(session.started_at)
-              const end = new Date(session.ended_at)
-              return (
-                <div class="session-row">
-                  <span class="session-time-range mono">
-                    {formatTimeShort(start)}
-                    <span class="session-arrow">&rarr;</span>
-                    {formatTimeShort(end)}
-                  </span>
-                  <span class="session-duration mono">{formatDuration(session.duration_secs)}</span>
-                  <span class="session-title">{session.window_title}</span>
-                </div>
-              )
-            }}
-          </For>
-        </div>
+        <Show when={projects() && projects()!.length > 0}>
+          <div class="project-breakdown">
+            <h3 class="project-breakdown-title">Projects</h3>
+            <For each={projects()!}>
+              {(project) => {
+                const maxSecs = () => Math.max(...(projects() ?? []).map((p) => p.total_secs), 1)
+                const pct = () => (project.total_secs / maxSecs()) * 100
+                return (
+                  <div class="project-row">
+                    <div class="project-row-header">
+                      <span class="project-name">{project.project}</span>
+                      <span class="project-duration mono">
+                        {formatDuration(project.total_secs)}
+                      </span>
+                    </div>
+                    <div class="project-bar-track">
+                      <div class="project-bar-fill" style={{ width: `${pct()}%` }} />
+                    </div>
+                    <Show when={project.details.length > 0}>
+                      <div class="project-details">
+                        <For each={project.details}>
+                          {(detail) => (
+                            <div class="project-detail-row">
+                              <span class="project-detail-label">{detail.label}</span>
+                              <span class="project-detail-duration mono">
+                                {formatDuration(detail.total_secs)}
+                              </span>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                )
+              }}
+            </For>
+          </div>
+        </Show>
       </Show>
 
       <Show when={showIgnore()}>

@@ -8,6 +8,8 @@ export interface AppSession {
   duration_secs: number
   is_idle: boolean
   metadata: string
+  project: string | null
+  detail: string | null
 }
 
 export interface DailySummary {
@@ -24,4 +26,34 @@ export interface AppUsage {
   session_count: number
 }
 
-export type AppCategory = 'productive' | 'neutral' | 'distracting'
+export interface ProjectUsage {
+  project: string
+  total_secs: number
+  session_count: number
+  details: ProjectDetail[]
+}
+
+export interface ProjectDetail {
+  label: string
+  total_secs: number
+}
+
+export interface Space {
+  id: number
+  name: string
+  color: string
+  initials: string
+  emoji: string | null
+}
+
+export interface SpaceWithProjects {
+  space: Space
+  projects: string[]
+}
+
+export interface SpaceUsage {
+  space: Space | null
+  projects: ProjectUsage[]
+  total_secs: number
+  session_count: number
+}
