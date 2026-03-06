@@ -1,5 +1,4 @@
-import { createSignal, lazy, onCleanup, onMount, Show, Suspense } from 'solid-js'
-import { Dynamic } from 'solid-js/web'
+import { createSignal, lazy, onCleanup, onMount, Show } from 'solid-js'
 import OnboardingView from './components/OnboardingView'
 import { useApp } from './lib/context'
 import './index.css'
@@ -13,7 +12,7 @@ type View = 'today' | 'weekly' | 'monthly' | 'settings'
 
 const viewOrder: View[] = ['today', 'weekly', 'monthly', 'settings']
 
-const views = {
+const lazyViews = {
   today: TodayView,
   weekly: WeeklyView,
   monthly: MonthlyView,
@@ -23,23 +22,20 @@ const views = {
 function App() {
   const { onboardingDone } = useApp()
   const [view, setView] = createSignal<View>('today')
-  const [transitioning, setTransitioning] = createSignal(false)
+  const [visited, setVisited] = createSignal<Set<View>>(new Set(['today']))
 
   function switchView(next: View) {
     if (next === view()) return
-    setTransitioning(true)
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        setView(next)
-        requestAnimationFrame(() => {
-          setTransitioning(false)
-        })
-      }, 100)
-    })
+    setVisited((prev) => new Set([...prev, next]))
+    setView(next)
   }
 
   function preloadView(v: View) {
-    views[v].preload()
+    lazyViews[v].preload()
+    setVisited((prev) => {
+      if (prev.has(v)) return prev
+      return new Set([...prev, v])
+    })
   }
 
   onMount(() => {
@@ -142,11 +138,24 @@ function App() {
           </button>
         </nav>
         <main class="content">
-          <Suspense>
-            <div classList={{ 'view-container': true, 'view-fade-out': transitioning() }}>
-              <Dynamic component={views[view()]} />
+          <div class="view-panel" style={{ display: view() === 'today' ? 'block' : 'none' }}>
+            <TodayView />
+          </div>
+          <Show when={visited().has('weekly')}>
+            <div class="view-panel" style={{ display: view() === 'weekly' ? 'block' : 'none' }}>
+              <WeeklyView />
             </div>
-          </Suspense>
+          </Show>
+          <Show when={visited().has('monthly')}>
+            <div class="view-panel" style={{ display: view() === 'monthly' ? 'block' : 'none' }}>
+              <MonthlyView />
+            </div>
+          </Show>
+          <Show when={visited().has('settings')}>
+            <div class="view-panel" style={{ display: view() === 'settings' ? 'block' : 'none' }}>
+              <SettingsView />
+            </div>
+          </Show>
         </main>
       </div>
     </Show>

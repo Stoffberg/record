@@ -146,14 +146,7 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.view-container {
-  opacity: 1;
-  transition: opacity 100ms ease;
-}
 
-.view-fade-out {
-  opacity: 0;
-}
 
 .today-view,
 .weekly-view,
@@ -770,6 +763,19 @@ body {
 .app-detail-ignore:hover {
   color: var(--text-secondary);
   background: var(--bg-hover);
+}
+
+.category-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.category-picker-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .timeline {

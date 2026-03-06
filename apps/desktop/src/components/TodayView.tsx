@@ -1,7 +1,7 @@
-import type { AppUsage } from '@record/types'
+import type { AppCategory, AppUsage } from '@record/types'
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { createStore, reconcile } from 'solid-js/store'
-import { getAppIcon, getDailySummary } from '../lib/api'
+import { getAllCategories, getAppIcon, getDailySummary } from '../lib/api'
 import AppDetailView from './AppDetailView'
 
 function formatDuration(secs: number): string {
@@ -85,9 +85,15 @@ export default function TodayView() {
   const [elapsed, setElapsed] = createSignal(0)
   const [selectedDate, setSelectedDate] = createSignal(new Date())
   const [selectedApp, setSelectedApp] = createSignal<AppUsage | null>(null)
+  const [categories, setCategories] = createSignal<Map<string, AppCategory>>(new Map())
   let lastFetchTime = 0
 
   const isToday = () => sameDay(selectedDate(), new Date())
+
+  async function refreshCategories() {
+    const cats = await getAllCategories()
+    setCategories(new Map(cats))
+  }
 
   async function refresh() {
     try {
@@ -130,6 +136,7 @@ export default function TodayView() {
 
   onMount(() => {
     refresh()
+    refreshCategories()
     const fetchId = setInterval(() => {
       if (isToday()) refresh()
     }, 5000)
@@ -168,6 +175,21 @@ export default function TodayView() {
 
   const visibleApps = createMemo(() => state.apps.filter((a) => a.total_secs >= 60))
 
+  const productivityScore = createMemo(() => {
+    const apps = visibleApps()
+    const cats = categories()
+    let productive = 0
+    let distracting = 0
+    for (const app of apps) {
+      const cat = cats.get(app.bundle_id) ?? 'neutral'
+      if (cat === 'productive') productive += app.total_secs
+      else if (cat === 'distracting') distracting += app.total_secs
+    }
+    const total = productive + distracting
+    if (total === 0) return null
+    return Math.round((productive / total) * 100)
+  })
+
   const topAppSecs = createMemo(() => {
     const apps = visibleApps()
     if (apps.length === 0) return 1
@@ -181,7 +203,10 @@ export default function TodayView() {
         <AppDetailView
           app={selectedApp()!}
           date={selectedDate()}
-          onBack={() => setSelectedApp(null)}
+          onBack={() => {
+            setSelectedApp(null)
+            refreshCategories()
+          }}
         />
       }
     >
@@ -216,7 +241,7 @@ export default function TodayView() {
           </div>
         </header>
 
-        <Show when={state.ready} fallback={<div class="today-empty">Waiting for data...</div>}>
+        <Show when={state.ready}>
           <div class="today-stats">
             <div class="stat-card">
               <span class="stat-label">Active</span>
@@ -227,8 +252,10 @@ export default function TodayView() {
               <span class="stat-value mono">{formatTime(idleTime())}</span>
             </div>
             <div class="stat-card">
-              <span class="stat-label">Apps</span>
-              <span class="stat-value mono">{visibleApps().length}</span>
+              <span class="stat-label">Productive</span>
+              <span class="stat-value mono">
+                {productivityScore() !== null ? `${productivityScore()}%` : '\u2014'}
+              </span>
             </div>
           </div>
 

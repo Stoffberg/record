@@ -23,3 +23,5 @@ export interface AppUsage {
   total_secs: number
   session_count: number
 }
+
+export type AppCategory = 'productive' | 'neutral' | 'distracting'

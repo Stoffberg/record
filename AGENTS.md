@@ -78,7 +78,11 @@ App icon extraction: `mdfind` to locate the `.app`, read `CFBundleIconFile` from
 
 The Today view uses dual-rate updates: 5-second backend fetch + 1-second frontend interpolation for live-ticking counters.
 
-View switching uses `Dynamic` with a signal, not a router.
+View switching uses persistent mounting, not a router or Dynamic. All views stay mounted once visited and are toggled via `display: none/block`. This eliminates loading flashes entirely. Hovering a sidebar nav item triggers both `lazy().preload()` (loads the JS chunk) and adds the view to the `visited` set (mounts the component hidden). By the time the user clicks, the view has already fetched its data and rendered. Never show "Loading..." text or empty fallbacks during view transitions.
+
+When adding new views, follow this pattern: add the lazy import, add an entry to `viewOrder`, add a `Show when={visited().has('viewname')}` block in the content area with `display` toggled by the active view signal. Use `createResource` for initial data loads so the view renders only when data is ready (avoids flicker from signal defaults being overwritten on mount).
+
+Keyboard shortcuts: Cmd+1/2/3/4 switch views. Arrow keys navigate dates in Today and Weekly views. Press `t` to jump to today.
 
 ## Design
 

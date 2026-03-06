@@ -1,4 +1,4 @@
-import type { AppSession, DailySummary } from '@record/types'
+import type { AppCategory, AppSession, DailySummary } from '@record/types'
 import { getVersion as tauriGetVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -85,6 +85,18 @@ export async function removeExclusion(bundleId: string): Promise<void> {
 
 export async function getExclusions(): Promise<[string, string, string | null][]> {
   return invoke('get_exclusions')
+}
+
+export async function setAppCategory(bundleId: string, category: AppCategory): Promise<void> {
+  await invoke('set_app_category', { bundleId, category })
+}
+
+export async function getAppCategory(bundleId: string): Promise<AppCategory> {
+  return invoke<AppCategory>('get_app_category', { bundleId })
+}
+
+export async function getAllCategories(): Promise<[string, AppCategory][]> {
+  return invoke<[string, AppCategory][]>('get_all_categories')
 }
 
 export async function checkAccessibility(): Promise<boolean> {

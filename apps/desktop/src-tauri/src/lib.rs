@@ -182,6 +182,37 @@ fn get_exclusions(
 }
 
 #[tauri::command]
+fn set_app_category(
+    state: tauri::State<AppState>,
+    bundle_id: String,
+    category: String,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .set_app_category(&bundle_id, &category)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_app_category(
+    state: tauri::State<AppState>,
+    bundle_id: String,
+) -> Result<String, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .get_app_category(&bundle_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_all_categories(
+    state: tauri::State<AppState>,
+) -> Result<Vec<(String, String)>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.get_all_categories().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn check_accessibility() -> bool {
     macos_accessibility_check(false)
 }
@@ -332,6 +363,9 @@ pub fn run() {
             add_exclusion,
             remove_exclusion,
             get_exclusions,
+            set_app_category,
+            get_app_category,
+            get_all_categories,
             check_accessibility,
             request_accessibility
         ])

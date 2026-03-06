@@ -99,6 +99,7 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 - [ ] View transitions with preloading (fade animations, hover preload)
 - [ ] Weekly summary view with prior week comparison
 - [ ] App categories and productivity score (Productive, Neutral, Distracting)
+- [ ] Default category presets for common apps (Xcode, VS Code, Slack, etc.)
 - [ ] Focus goals (daily targets for productive time or app limits)
 - [ ] Project detection from window titles (editor workspace, browser tab, terminal session)
 - [ ] Session context and tagging (add notes to sessions for work journaling)

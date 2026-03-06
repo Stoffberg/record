@@ -108,7 +108,7 @@ export default function MonthlyView() {
         <h1>{new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h1>
       </header>
 
-      <Show when={summaries()} fallback={<div class="today-empty">Loading...</div>}>
+      <Show when={summaries()}>
         {(data) => (
           <div class="day-list">
             <For each={data()}>

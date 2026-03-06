@@ -282,6 +282,42 @@ impl SessionStore {
         rows.collect()
     }
 
+    pub fn set_app_category(&self, bundle_id: &str, category: &str) -> rusqlite::Result<()> {
+        if category == "neutral" {
+            self.conn.execute(
+                "DELETE FROM app_categories WHERE bundle_id = ?1",
+                rusqlite::params![bundle_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO app_categories (bundle_id, category) VALUES (?1, ?2)",
+                rusqlite::params![bundle_id, category],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_app_category(&self, bundle_id: &str) -> rusqlite::Result<String> {
+        let result: rusqlite::Result<String> = self.conn.query_row(
+            "SELECT category FROM app_categories WHERE bundle_id = ?1",
+            rusqlite::params![bundle_id],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(cat) => Ok(cat),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok("neutral".to_string()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn get_all_categories(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT bundle_id, category FROM app_categories")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     pub fn is_excluded(&self, bundle_id: &str) -> rusqlite::Result<bool> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
@@ -318,6 +354,11 @@ impl SessionStore {
                 bundle_id TEXT PRIMARY KEY,
                 app_name TEXT NOT NULL,
                 expires_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS app_categories (
+                bundle_id TEXT PRIMARY KEY,
+                category TEXT NOT NULL DEFAULT 'neutral'
             );
 
             PRAGMA journal_mode=WAL;",
@@ -637,6 +678,44 @@ mod tests {
         assert_eq!(summary.apps[0].app_name, "Code");
         assert_eq!(summary.total_active_secs, 5, "only Code's 5s should count");
         assert_eq!(summary.total_idle_secs, 0);
+    }
+
+    #[test]
+    fn set_and_get_app_category() {
+        let store = test_store();
+
+        assert_eq!(
+            store.get_app_category("com.apple.Safari").unwrap(),
+            "neutral"
+        );
+
+        store
+            .set_app_category("com.apple.Safari", "productive")
+            .unwrap();
+        assert_eq!(
+            store.get_app_category("com.apple.Safari").unwrap(),
+            "productive"
+        );
+
+        store
+            .set_app_category("com.apple.Safari", "neutral")
+            .unwrap();
+        assert_eq!(
+            store.get_app_category("com.apple.Safari").unwrap(),
+            "neutral"
+        );
+
+        let all = store.get_all_categories().unwrap();
+        assert!(all.is_empty(), "neutral should be deleted from table");
+
+        store
+            .set_app_category("com.apple.Safari", "distracting")
+            .unwrap();
+        store
+            .set_app_category("com.microsoft.VSCode", "productive")
+            .unwrap();
+        let all = store.get_all_categories().unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     #[test]

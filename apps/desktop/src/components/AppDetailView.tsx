@@ -1,6 +1,13 @@
-import type { AppSession, AppUsage } from '@record/types'
+import type { AppCategory, AppSession, AppUsage } from '@record/types'
 import { createMemo, createResource, createSignal, For, onMount, Show } from 'solid-js'
-import { addExclusion, getAppAverages, getAppIcon, getAppSessions } from '../lib/api'
+import {
+  addExclusion,
+  getAppAverages,
+  getAppCategory,
+  getAppIcon,
+  getAppSessions,
+  setAppCategory,
+} from '../lib/api'
 
 function formatDuration(secs: number): string {
   if (secs < 60) return `${secs}s`
@@ -206,8 +213,18 @@ interface Props {
   onBack: () => void
 }
 
+const CATEGORIES: { value: AppCategory; label: string }[] = [
+  { value: 'productive', label: 'Productive' },
+  { value: 'neutral', label: 'Neutral' },
+  { value: 'distracting', label: 'Distracting' },
+]
+
 export default function AppDetailView(props: Props) {
   const [showIgnore, setShowIgnore] = createSignal(false)
+  const [categoryResource, { mutate: mutateCategory }] = createResource(
+    () => props.app.bundle_id,
+    (bundleId) => getAppCategory(bundleId),
+  )
   const [sessions] = createResource(
     () => ({ bundleId: props.app.bundle_id, date: props.date }),
     ({ bundleId, date }) => getAppSessions(date, bundleId),
@@ -216,6 +233,11 @@ export default function AppDetailView(props: Props) {
     () => ({ bundleId: props.app.bundle_id, date: props.date }),
     ({ bundleId, date }) => getAppAverages(date, bundleId),
   )
+
+  async function handleCategoryChange(cat: AppCategory) {
+    mutateCategory(cat)
+    await setAppCategory(props.app.bundle_id, cat)
+  }
 
   const stats = createMemo(() => {
     const s = sessions()
@@ -279,6 +301,27 @@ export default function AppDetailView(props: Props) {
           </svg>
         </button>
       </header>
+
+      <Show when={categoryResource()}>
+        {(currentCat) => (
+          <div class="category-picker">
+            <span class="category-picker-label">Category</span>
+            <div class="segment-control">
+              <For each={CATEGORIES}>
+                {(cat) => (
+                  <button
+                    type="button"
+                    classList={{ active: currentCat() === cat.value }}
+                    onClick={() => handleCategoryChange(cat.value)}
+                  >
+                    {cat.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+        )}
+      </Show>
 
       <Show
         when={sessions() && sessions()!.length > 0}
