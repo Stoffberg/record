@@ -202,18 +202,19 @@ function IgnoreModal(props: IgnoreModalProps) {
 
 interface Props {
   app: AppUsage
+  date: Date
   onBack: () => void
 }
 
 export default function AppDetailView(props: Props) {
   const [showIgnore, setShowIgnore] = createSignal(false)
   const [sessions] = createResource(
-    () => props.app.bundle_id,
-    (bundleId) => getAppSessions(new Date(), bundleId),
+    () => ({ bundleId: props.app.bundle_id, date: props.date }),
+    ({ bundleId, date }) => getAppSessions(date, bundleId),
   )
   const [averages] = createResource(
-    () => props.app.bundle_id,
-    (bundleId) => getAppAverages(new Date(), bundleId),
+    () => ({ bundleId: props.app.bundle_id, date: props.date }),
+    ({ bundleId, date }) => getAppAverages(date, bundleId),
   )
 
   const stats = createMemo(() => {
@@ -255,7 +256,7 @@ export default function AppDetailView(props: Props) {
         <AppIcon bundleId={props.app.bundle_id} size={28} />
         <div class="app-detail-title">
           <h1>{props.app.app_name}</h1>
-          <span class="app-detail-subtitle mono">{formatDuration(props.app.total_secs)} today</span>
+          <span class="app-detail-subtitle mono">{formatDuration(props.app.total_secs)}</span>
         </div>
         <div class="app-detail-spacer" />
         <button

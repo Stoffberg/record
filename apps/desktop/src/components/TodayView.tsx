@@ -19,6 +19,31 @@ function formatTime(secs: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  )
+}
+
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+function formatDateLabel(date: Date): string {
+  const now = new Date()
+  if (sameDay(date, now)) return 'Today'
+  if (sameDay(date, addDays(now, -1))) return 'Yesterday'
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+}
+
 function AppIcon(props: { bundleId: string }) {
   const [src, setSrc] = createSignal<string | null>(null)
 
@@ -58,12 +83,15 @@ export default function TodayView() {
     ready: false,
   })
   const [elapsed, setElapsed] = createSignal(0)
+  const [selectedDate, setSelectedDate] = createSignal(new Date())
   const [selectedApp, setSelectedApp] = createSignal<AppUsage | null>(null)
   let lastFetchTime = 0
 
+  const isToday = () => sameDay(selectedDate(), new Date())
+
   async function refresh() {
     try {
-      const data = await getDailySummary(new Date())
+      const data = await getDailySummary(selectedDate())
       setState({
         activeSecs: data.total_active_secs,
         idleSecs: data.total_idle_secs,
@@ -77,21 +105,65 @@ export default function TodayView() {
     }
   }
 
+  function goToPreviousDay() {
+    setSelectedApp(null)
+    setState('ready', false)
+    setSelectedDate(addDays(selectedDate(), -1))
+    refresh()
+  }
+
+  function goToNextDay() {
+    if (isToday()) return
+    setSelectedApp(null)
+    setState('ready', false)
+    setSelectedDate(addDays(selectedDate(), 1))
+    refresh()
+  }
+
+  function goToToday() {
+    if (isToday()) return
+    setSelectedApp(null)
+    setState('ready', false)
+    setSelectedDate(new Date())
+    refresh()
+  }
+
   onMount(() => {
     refresh()
-    const fetchId = setInterval(refresh, 5000)
+    const fetchId = setInterval(() => {
+      if (isToday()) refresh()
+    }, 5000)
     const tickId = setInterval(() => {
-      if (lastFetchTime > 0) {
+      if (isToday() && lastFetchTime > 0) {
         setElapsed(Math.floor((Date.now() - lastFetchTime) / 1000))
       }
     }, 1000)
+
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (selectedApp()) return
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        goToPreviousDay()
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        goToNextDay()
+      } else if (e.key === 't') {
+        e.preventDefault()
+        goToToday()
+      }
+    }
+    window.addEventListener('keydown', keyHandler)
+
     onCleanup(() => {
       clearInterval(fetchId)
       clearInterval(tickId)
+      window.removeEventListener('keydown', keyHandler)
     })
   })
 
-  const activeTime = () => state.activeSecs + elapsed()
+  const liveElapsed = () => (isToday() ? elapsed() : 0)
+  const activeTime = () => state.activeSecs + liveElapsed()
   const idleTime = () => state.idleSecs
 
   const visibleApps = createMemo(() => state.apps.filter((a) => a.total_secs >= 60))
@@ -99,23 +171,49 @@ export default function TodayView() {
   const topAppSecs = createMemo(() => {
     const apps = visibleApps()
     if (apps.length === 0) return 1
-    return Math.max(apps[0].total_secs + elapsed(), 1)
+    return Math.max(apps[0].total_secs + liveElapsed(), 1)
   })
 
   return (
     <Show
       when={!selectedApp()}
-      fallback={<AppDetailView app={selectedApp()!} onBack={() => setSelectedApp(null)} />}
+      fallback={
+        <AppDetailView
+          app={selectedApp()!}
+          date={selectedDate()}
+          onBack={() => setSelectedApp(null)}
+        />
+      }
     >
       <div class="today-view">
         <header class="today-header">
-          <h1>
-            {new Date().toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-            })}
-          </h1>
+          <div class="date-nav">
+            <button type="button" class="date-nav-btn" onClick={goToPreviousDay}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M10 3L5 8l5 5"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <span class="date-nav-label">
+              <span class="date-nav-heading">{formatDateLabel(selectedDate())}</span>
+            </span>
+            <button type="button" class="date-nav-btn" onClick={goToNextDay} disabled={isToday()}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M6 3l5 5-5 5"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
         </header>
 
         <Show when={state.ready} fallback={<div class="today-empty">Waiting for data...</div>}>
@@ -136,12 +234,17 @@ export default function TodayView() {
 
           <Show
             when={visibleApps().length > 0}
-            fallback={<div class="today-empty">No activity recorded yet. Keep working.</div>}
+            fallback={
+              <div class="today-empty">
+                {isToday() ? 'No activity recorded yet. Keep working.' : 'No activity recorded.'}
+              </div>
+            }
           >
             <div class="app-list">
               <For each={visibleApps()}>
                 {(app, i) => {
-                  const liveSecs = () => (i() === 0 ? app.total_secs + elapsed() : app.total_secs)
+                  const liveSecs = () =>
+                    i() === 0 ? app.total_secs + liveElapsed() : app.total_secs
                   const pct = () => Math.max(2, (liveSecs() / topAppSecs()) * 100)
                   return (
                     <button type="button" class="app-row" onClick={() => setSelectedApp(app)}>

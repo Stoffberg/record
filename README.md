@@ -94,8 +94,16 @@ Everything stays in `~/Library/Application Support/dev.stoff.record/`:
 - [x] Onboarding screen with Accessibility permission prompt
 - [x] Click a day in monthly view to see that day's breakdown
 - [x] App exclusion list (ignore specific apps from tracking)
+- [ ] Date navigation (browse any past day from the Today view)
+- [ ] Keyboard navigation (Cmd+1/2/3 for views, arrow keys for dates, t for today)
+- [ ] View transitions with preloading (fade animations, hover preload)
+- [ ] Weekly summary view with prior week comparison
+- [ ] App categories and productivity score (Productive, Neutral, Distracting)
+- [ ] Focus goals (daily targets for productive time or app limits)
+- [ ] Project detection from window titles (editor workspace, browser tab, terminal session)
+- [ ] Session context and tagging (add notes to sessions for work journaling)
 - [ ] Data export (JSON/CSV for backup or LLM analysis)
-- [ ] Weekly summary notifications
+- [ ] Weekly digest notification (Monday summary with productivity score)
 - [ ] Homebrew cask distribution
 
 ## License
